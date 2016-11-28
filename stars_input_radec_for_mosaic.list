@@ -1,0 +1,19 @@
+#
+#
+#
+# x and y can be pixel values, or RA and Dec strings or floats. 
+#To differentiate, put 'position_pixel' in the top line if the inputs
+#are pixel values.
+x_or_RA  y_or_Dec   magnitude    
+360.001 0.003  15.00
+359.994 0.006  15.50
+359.993 0.003  16.25
+359.994 -0.004 16.25
+359.996 -0.007 15.25
+360.007 0.007 15.50
+359.998 -0.006 14.50
+359.980 -0.002 15.50
+359.977 0.005 14.75
+359.974 0.006 14.25
+359.995 0.012 15.50
+359.992 0.015 14.75
