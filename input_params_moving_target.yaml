@@ -1,13 +1,13 @@
 Inst:
   instrument: NIRCam          #Instrument name
-  mode: imaging               #Observation mode (e.g. imaging, WFSS, moving_target)
+  mode: moving_target               #Observation mode (e.g. imaging, WFSS, moving_target)
   nresetlines: 512                        #eventially use dictionary w/in code to look this up
 
 Readout:
-  readpatt: RAPID        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized
+  readpatt: BRIGHT2        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized
   nframe: 1        #Number of frames per group
   nskip: 0         #Number of skipped frames between groups
-  ngroup: 10              #Number of groups in integration
+  ngroup: 4              #Number of groups in integration
   namp: 4                               #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
   array_name: NRCA1_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
   subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format
@@ -66,7 +66,7 @@ simSignals:
   movingTargetExtended: None  #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)
   movingTargetConvolveExtended: True       #convolve the extended moving targets with PSF before adding.
 
-  movingTargetToTrack: None #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to 'moving_target'  
+  movingTargetToTrack: moving_target_to_track.list #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to 'moving_target'  
 
   zodiacal:  None                          #Zodiacal light count rate image file 
   zodiscale:  1.0                            #Zodi scaling factor
@@ -83,10 +83,10 @@ Telescope:
   rotation: 0.0                    #y axis rotation (degrees E of N)
 
 newRamp:
-  combine_method: PROPER      #use PROPER. Prvious option, STANDARD, not supported
-  proper_combine: BOTH        #HOTPIX, COSMICRAYS, BOTH - pixels to use the "PROPER" combine_method on
-  proper_signal_limit: 5000   #Signal level (ADU), above which to combine simulated signals and dark via proper method
-  linearized_darkfile: None   #Name of file containing the linearized version of the dark current ramp specified in Reffiles section above (If 'none', the linearized ramp is constructed on the fly)
+  combine_method: PROPER  #use PROPER. Prvious option, STANDARD, not supported
+  proper_combine: BOTH  #HOTPIX, COSMICRAYS, BOTH - pixels to use the "PROPER" combine_method on
+  proper_signal_limit: 5000  #Signal level (ADU), above which to combine simulated signals and dark via proper method
+  linearized_darkfile: None  #Name of file containing the linearized version of the dark current ramp specified in Reffiles section above (If 'none', the linearized ramp is constructed on the fly)
   dq_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/dq_init.cfg  #DQ Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
   sat_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/saturation.cfg  #Saturation Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
   superbias_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/superbias.cfg  #Superbias Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
