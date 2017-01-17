@@ -4,22 +4,7 @@
 Rewritten version of Kevin Volk's rampsim.py. Updated to be more general
 and flexible such that other instruments can use the code
 
-Lots of documentation to add here....
-
-V0.0 - re-wrote original script. 
-V0.1 - add ability to properly combine the dark plus simulated signals,
-       by linearizing the dark ramp, making the sum, and then re-
-       introducing the non-linearity.
-       Re-order steps a bit so that paramter check is the first thing done
-
-1. read in parameter file (yaml)
-2. make adjustments to inputs (like checkParameterfile) 
-
-
-TSO work.....
-
-NEED UPDATED PSF LIBRARY!! NEED SUB-SAMPLED PSFS FOR EVERYTHING. ALSO NEED
-PSFS FOR WLP8+FILTER COMBINATIONS, AS WELL AS FW+PW COMBOS...
+STILL DON'T HAVE PSFS FOR WLP8+FILTER COMBINATIONS
 
 Allowed optics:
 SW:
@@ -33,48 +18,15 @@ when SW requested is [CLEAR,F162M,F164N]: then appropriate LW filters are:
 250M,300M,335M,360M,410M,430M,460M,480M,277W,322W2,356W,444W
 when SW requested is WLP8, allowed filters are: 322W2+323N, 444W+405N, 444W+466N, 444W+470N
 
-Allowed readout patterns:
-rapid, bright, shallow.  NO medium or deep allowed.
-
-subarrays allowed:
-64x64
-160x160
-400x400
-full frame
-
 adjust to create nint > 1??
 or do nint=1 and output source catalogs at end of integration. Use that
 as input for the next integration.
 
-same as normal imaging, star list, galaxy list,
-but create a larger image than the grism_direct_image???
-
-1. make an extended-range signal rate frame
-2. inputs: direction and speed of telescope slew
-3. calculate the position of each source at the time of each frame
-  3a. transform input positions to unditsorted coords
-  3b. shift everything by N arsec in the appropriate direction
-  3c. put back into distorted coords.
-But how does this work with extended objects???
-do steps 3a to 3c for all pixels that have signal > something?
-
-
-4. add the right amount of signal to each pixel between the position of a given source in frame 0 and frame N, given the signal rate and the slew rate.
-OR
-4. repeatedly shift and add frame 0 in the appropriate direction to produce the object streaks...but this
-won't take into account distortion differences across the detector...
-
-
-
-
 '''
-#adjust error array along the way in parallel
-#check work using pixelscale. kevins original script has lots of pixelscale/3600. which 
-#doesnt make sense. shouldnt you multiply by 3600 to get degrees? dividing gets you...what?
-
 
 import argparse,sys, glob, os
 import yaml
+from copy import copy
 import scipy.ndimage.interpolation as interpolation
 import scipy.signal as s1
 #from jwst_lib.models import RampModel #build 6
@@ -83,6 +35,7 @@ import numpy as np
 import math,random
 from astropy.io import fits,ascii
 from astropy.table import Table
+from astropy.time import Time
 from itertools import izip
 import datetime
 from astropy.modeling.models import Sersic2D
@@ -93,8 +46,21 @@ from astropy.convolution import convolve
 import read_siaf_table
 import moving_targets
 
+#try to find set_telescope_pointing.py
+try:
+    import imp
+    conda_path = os.environ['CONDA_PREFIX']
+    set_telescope_pointing = imp.load_source('set_telescope_pointing', os.path.join(conda_path, 'bin/set_telescope_pointing.py'))
+    stp_flag = True
+except:
+    print("Unable to import set_telescope_pointing.py. This must be run on the")
+    print("simulated ramps prior to running the assign_wcs step of the pipeline.")
+    print("Once found, run with: set_telescope_pointing.py filename, or from")
+    print("within python: set_telescope_pointing.add_wcs(filename)")
+    stp_flag = False
+   
 inst_list = ['nircam','niriss','nirspec','miri','fgs']
-modes = {'nircam':['imaging','wfss','tso'],'niriss':['imaging','wfss','soss']}
+modes = {'nircam':['imaging','moving_target'],'niriss':['imaging','wfss','soss']}
 inst_abbrev = {'nircam':'NRC','nirspec':'NRS','miri':'MIRI','niriss':'NRS'}
 pointSourceModes = ['imaging']
 pixelScale = {'nircam':{'sw':0.031,'lw':0.063}}
@@ -135,10 +101,6 @@ class RampSim():
         #define the subarray bounds from param file
         self.getSubarrayBounds()
 
-        #this is now done in getSubarrayBounds
-        #set the number of amps used in the readout 
-        #self.setNumAmps()
-
         #read in the input dark current frame, and crop using
         #the subarray bounds provided in the parameter file
         self.getBaseDark()
@@ -154,6 +116,7 @@ class RampSim():
         #on the full dark before cropping, so that reference pixels can be
         #used in the processing.
         self.linDark = None
+        self.sbAndRefPixEffects = None
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
             if self.runStep['linearized_darkfile'] == False:
                 #before superbias subtraction, refpix subtraction and linearizing
@@ -166,7 +129,7 @@ class RampSim():
                 
                 #Now we need to linearize the zeroframe. Place it into a RampModel instance
                 #before running the pipeline steps
-                if darkzeroframe != None:
+                if darkzeroframe is not None:
                     zeroModel = RampModel()
                     zyd,zxd = darkzeroframe.shape
                     filler = np.zeros((1,1,zyd,zxd))
@@ -188,17 +151,22 @@ class RampSim():
                     #print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
 
             else:
-                self.readLinearDark()
+                zeroModel = self.readLinearDark()
+                self.sbAndRefpixEffects = None
+                zero_sbAndRefEffects = None
+
             #Crop the linearized dark to the requested
             #subarray size
             self.linDark = self.cropDark(self.linDark)
-
+            if zeroModel is not None:
+                zeroModel = self.cropDark(zeroModel)
+                
             #save the linearized dark for testing
             if self.params['Output']['save_intermediates']:
                 h0=fits.PrimaryHDU()
                 h1 = fits.ImageHDU(self.linDark.data)
                 hl=fits.HDUList([h0,h1])
-                hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',clobber=True)
+                hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
 
         #Now crop the dark current ramp 
         #down to the requested subarray size
@@ -209,21 +177,16 @@ class RampSim():
             h0=fits.PrimaryHDU()
             h1 = fits.ImageHDU(self.dark.data)
             hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_croppedDark.fits',clobber=True)
+            hl.writeto(self.params['Output']['file'][0:-5] + '_croppedDark.fits',overwrite=True)
         
 
         #Find the difference between the cropped original dark and the cropped linearized dark
         #This will be used later to re-add the superbias and refpix-associated signal to the final
         #output ramp.
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            self.sbAndRefpixEffects = self.sbAndRefpixEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
-            
-            #save this image
-            #h0 = fits.PrimaryHDU(self.sbAndRefpixEffects)
-            #hl = fits.HDUList([h0])
-            #hl.writeto('sbAndRefpix.fits',clobber=True)
-            #sys.exit()
-            
+            if self.sbAndRefpixEffects is not None:
+                self.sbAndRefpixEffects = self.sbAndRefpixEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
+
         #calculate the exposure time of a single frame, based on the size of the subarray
         self.calcFrameTime()
 
@@ -237,70 +200,275 @@ class RampSim():
         #If the output is a TSO ramp, use the slew rate and angle (and whether a grism
         #direct image is requested) to determine how much larger than nominal the
         #signal rate image should be
-        if self.params['Inst']['mode'] == 'tso' or self.params['Output']['grism_source_image']:
+        if self.params['Inst']['mode'] == 'moving_target' or self.params['Output']['grism_source_image']:
             self.calcCoordAdjust()
 
         #image dimensions
         self.nominal_dims = np.array([self.subarray_bounds[3]-self.subarray_bounds[1]+1,self.subarray_bounds[2]-self.subarray_bounds[0]+1])
-        self.grism_dims = (self.nominal_dims * np.array([self.coord_adjust['y'],self.coord_adjust['x']])).astype(np.int)
-        print("Nominal output image dimensions: {}".format(self.nominal_dims))
-        print("Grism output image dimensions: {}".format(self.grism_dims))
+        #self.grism_dims = (self.nominal_dims * np.array([self.coord_adjust['y'],self.coord_adjust['x']])).astype(np.int)
+        #print("Nominal output image dimensions: {}".format(self.nominal_dims))
+        #print("Grism output image dimensions: {}".format(self.grism_dims))
+
+        self.output_dims = (self.nominal_dims * np.array([self.coord_adjust['y'],self.coord_adjust['x']])).astype(np.int)
 
         #generate the signal image from the input reference files
         #The output contains signal in ADU that accumulate
         #in one frametime.
-        print('Creating signal rate image of synthetic inputs.')
-        frameimage = self.addedSignals()
+        frameimage = None
+        if self.params['Inst']['mode'].lower() == 'imaging':
+            print('Creating signal rate image of synthetic inputs.')
+            frameimage = self.addedSignals()
 
-        #if moving targets are requested (KBOs, asteroids, etc, NOT TSO mode
+        #If moving target mode is used (i.e. tracking a non-sidereal target), then
+        #everything in the point source, galaxy, and extended source lists needs to
+        #be treated as a moving target.
+        if self.params['Inst']['mode'].lower() == 'moving_target':
+
+            #create the count rate image for the non-sidereal target(s)
+            nonsidereal_countrate,ra_vel,dec_vel,vel_flag = self.nonsidereal_CRImage(self.params['simSignals']['movingTargetToTrack'])
+
+            #expand into a RAPID ramp and convert from signal rate to signals
+            ns_yd,ns_xd = nonsidereal_countrate.shape
+            totframes = self.params['Readout']['ngroup'] * (self.params['Readout']['nframe']+self.params['Readout']['nskip'])
+            tmptimes = self.frametime * np.arange(1,totframes+1)
+            non_sidereal_ramp = np.zeros((totframes,ns_yd,ns_xd))
+            for i in xrange(totframes):
+                non_sidereal_ramp[i,:,:] = nonsidereal_countrate * tmptimes[i]
+            non_sidereal_zero = non_sidereal_ramp[0,:,:]
+
+            #Now we need to collect all the other sources (point sources, galaxies, extended)
+            #in the other input files, and treat them as targets which will move across
+            #the field of view during the exposure.
+            mtt_data_list = []
+            mtt_zero_list = [] 
+
+            if self.runStep['pointsource']:
+                #now ptsrc is a list, which we need to get into movingTargetInputs...
+                mtt_ptsrc = self.movingTargetInputs(self.params['simSignals']['pointsource'],'pointSource',MT_tracking=True,tracking_ra_vel=ra_vel,tracking_dec_vel=dec_vel,trackingPixVelFlag=vel_flag)
+                mtt_ptsrc_zero = mtt_ptsrc[0,:,:]
+                mtt_data_list.append(mtt_ptsrc)
+                mtt_zero_list.append(mtt_ptsrc_zero)
+                print("Done with creating moving targets from {}".format(self.params['simSignals']['pointsource']))
+
+            if self.runStep['galaxies']:
+                mtt_galaxies = self.movingTargetInputs(self.params['simSignals']['galaxyListFile'],'galaxies',MT_tracking=True,tracking_ra_vel=ra_vel,tracking_dec_vel=dec_vel,trackingPixVelFlag=vel_flag)
+                mtt_galaxies_zero = mtt_galaxies[0,:,:]
+
+                mtt_data_list.append(mtt_galaxies)
+                mtt_zero_list.append(mtt_galaxies_zero)
+                print("Done with creating moving targets from {}".format(self.params['simSignals']['galaxyListFile']))
+
+                hh00 = fits.PrimaryHDU(mtt_galaxies)
+                hhllist = fits.HDUList([hh00])
+                hhllist.writeto('junk.fits',overwrite=True)
+                print('Moving target ramp with galaxies only written to junk.fits')
+
+            if self.runStep['extendedsource']:
+                mtt_ext = self.movingTargetInputs(self.params['simSignals']['extended'],'extended',MT_tracking=True,tracking_ra_vel=ra_vel,tracking_dec_vel=dec_vel,trackingPixVelFlag=vel_flag)
+                mtt_ext_zero = mtt_ext[0,:,:]
+                
+                mtt_data_list.append(mtt_ext)
+                mtt_zero_list.append(mtt_ext_zero)
+                print("Done with creating moving targets from {}".format(self.params['simSignals']['extended']))
+
+            print("Number of moving target ramps to combine {}".format(len(mtt_data_list)))
+
+            #add in the other objects which are not being tracked on 
+            #(i.e. the sidereal targets)
+            if len(mtt_data_list) > 0:
+                for i in xrange(len(mtt_data_list)):
+                    non_sidereal_ramp += mtt_data_list[i]
+                    non_sidereal_zero += mtt_zero_list[i]
+
+        #if moving targets are requested (KBOs, asteroids, etc, NOT moving_target mode
         #where the telescope slews), then create a RAPID integration which 
         #includes those targets
-        mov_targs = None
+        mov_targs_ramps = []
         if self.runStep['movingTargets']:
 
-            mov_targs = self.movingTargetInputs(self.params['simSignals']['movingTargetList'],'movingTarget')
-            mov_targs_zero = mov_targs[0,:,:]
+            print('Starting moving targets for point sources!')
+            mov_targs_ptsrc = self.movingTargetInputs(self.params['simSignals']['movingTargetList'],'pointSource',MT_tracking=False)
+            mov_targs_ramps.append(mov_targs_ptsrc)
 
-            #now rearrange the RAPID mov_targs integration to the requested readout pattern
-            if self.params['Readout']['readpatt'].upper() != 'RAPID':
-                mov_targs = self.changeReadPattern(mov_targs,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
 
+        #moving target using a sersic object
+        if self.runStep['movingTargetsSersic']:
+            print("Moving targets, sersic!")
+
+            mov_targs_sersic = self.movingTargetInputs(self.params['simSignals']['movingTargetSersic'],'galaxies',MT_tracking=False)
+            mov_targs_ramps.append(mov_targs_sersic)
 
         #moving target using an extended object
-        mov_targs_ext = None
         if self.runStep['movingTargetsExtended']:
             print("Extended moving targets!!!")
-            mov_targs_ext = self.movingTargetInputs(self.params['simSignals']['movingTargetExtended'],'movingTargetExtended')
-            if self.params['simSignals']['movingTargetConvolveExtended']:
-                 psffile = self.params['simSignals']['psfpath'] + self.params['simSignals']['psfbasename'] + '_' + self.params['Readout']['filter'].lower() + '_' + str(self.params['simSignals']['psfwfe']) + '_' + str(self.params['simSignals']['psfwfegroup']) + '_0p0_0p0.fits'
-                 psf = fits.getdata(psffile)
-                 for i in xrange(mov_targs_ext.shape[0]):
-                     iframe = mov_targs_ext[i,:,:]
-                     iframe = s1.fftconvolve(iframe,psf,mode="same")
-                     mov_targs_ext[i,:,:] = iframe
+            mov_targs_ext = self.movingTargetInputs(self.params['simSignals']['movingTargetExtended'],'extended',MT_tracking=False)
+            mov_targs_ramps.append(mov_targs_ext)
 
-            #keep the 0th frame
-            mov_targs_ext_zero = mov_targs_ext[0,:,:]
-
-            #now rearrange the RAPID mov_targs_ext integration to the requested readout pattern
-            if self.params['Readout']['readpatt'].upper() != 'RAPID':
-                mov_targs_ext = self.changeReadPattern(mov_targs_ext,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
 
         mov_targs_integration = None
-        mov_targs_zeroframe = None
-        if mov_targs is not None:
-            if mov_targs_ext is not None:
-                print("Moving targets integration is sum of point sources and extended targs")
-                mov_targs_integration = mov_targs + mov_targs_ext
-                mov_targs_zeroframe = mov_targs_zero + mov_targs_ext_zero
+        if self.runStep['movingTargets'] or self.runStep['movingTargetsSersic'] or self.runStep['movingTargetsExtended']:
+            #Combine the ramps of the moving targets if there is more than one type
+            mov_targs_integration = mov_targs_ramps[0]
+            if len(mov_targs_ramps) > 1:
+                for i in xrange(1,len(mov_targs_ramps)):
+                    mov_targs_integration += mov_targs_ramps[0]
+
+
+        #Combine the signal rate image and the moving target ramp. If signalramp is
+        #a ramp, then rearrange into the requested readout pattern
+        if mov_targs_integration is not None:
+            if self.params['Inst']['mode'].lower() == 'imaging':
+                signalramp = self.combineSimulatedDataSources('countrate',frameimage,None,mov_targs_integration)
+            elif self.params['Inst']['mode'].lower() == 'moving_target':
+                signalramp = self.combineSimulatedDataSources('ramp',non_sidereal_ramp,non_sidereal_zero,mov_targs_integration)
+
+            #save the combined static+moving targets ramp
+            if self.params['Output']['save_intermediates']:
+                h0=fits.PrimaryHDU()
+                h1 = fits.ImageHDU(signalramp)
+                hl=fits.HDUList([h0,h1])
+                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_plus_movingtargs_ramp.fits',overwrite=True)
+                print('Ramp of static plus moving target simulated sources saved to {}'.format(self.params['Output']['file'][0:-5] + '_noiseless_static_plus_movingtargs_ramp.fits'))
+
+
+        else:
+            if self.params['Inst']['mode'].lower() == 'imaging':
+                num_frames = self.params['Readout']['ngroup'] * (self.params['Readout']['nframe'] + self.params['Readout']['nskip'])
+                yd,xd = frameimage.shape
+                signalramp = np.zeros((num_frames,yd,xd))
+                for i in xrange(num_frames):
+                    signalramp[i,:,:] = frameimage * self.frametime * (i+1)
+                #signalzero = frameimage * self.frametime
+
+            elif self.params['Inst']['mode'].lower() == 'moving_target':
+                signalramp = non_sidereal_ramp
+                #signalzero = non_sidereal_zero
+
+            #save the combined static+moving targets ramp
+            if self.params['Output']['save_intermediates']:
+                h0=fits.PrimaryHDU()
+                h1 = fits.ImageHDU(signalramp)
+                hl=fits.HDUList([h0,h1])
+                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_tragets_ramp.fits',overwrite=True)
+
+
+
+
+        #ILLUMINATION FLAT
+        if self.runStep['illuminationflat']:
+            illuminationflat,illuminationflatheader = self.readCalFile(self.params['Reffiles']['illumflat'])
+            signalramp *= illuminationflat
+            #signalzero *= illuminationflat
+
+        #PIXEL FLAT
+        if self.runStep['pixelflat']:
+            pixelflat,pixelflatheader = self.readCalFile(self.params['Reffiles']['pixelflat'])
+            signalramp *= pixelflat
+            #signalzero *= pixelflat
+
+        #IPC EFFECTS
+        if self.runStep['ipc']:
+            ipcimage,ipcimageheader = self.readCalFile(self.params['Reffiles']['ipc'])
+                
+            #Assume that the IPC kernel is designed for the removal of IPC, which means we need to
+            #invert it.
+            if self.params['Reffiles']['invertIPC']:
+                print("Iverting IPC kernel prior to convolving with image")
+                yk,xk = ipcimage.shape
+                newkernel = 0. - ipcimage
+                newkernel[(yk-1)/2,(xk-1)/2] = 1. - (ipcimage[1,1]-np.sum(ipcimage))
+                ipcimage = newkernel
+
+            g,y,x = signalramp.shape
+            for group in xrange(g):
+                signalramp[group,:,:] = s1.fftconvolve(signalramp[group,:,:],ipcimage,mode="same")
+            #signalzero = s1.fftconvolve(signalzero,ipcimage,mode='same')
+
+        #CROSSTALK
+        if self.runStep['crosstalk']:
+            if self.params['Readout']['namp'] == 4:
+                xdet = self.detector[3:5].upper()
+                if xdet[1] == 'L':
+                    xdet = xdet[0] + '5'
+                xtcoeffs = self.readCrossTalkFile(self.params['Reffiles']['crosstalk'],xdet)
+                #Only sources on the detector will create crosstalk. If signalimage is larger than full frame
+                #because we are creating a grism image, then extract the pixels corresponding to the actual
+                #detector, and only create crosstalk values for those.
+                gd,yd,xd = signalramp.shape
+                xs = 0
+                xe = xd
+                ys = 0
+                ye = yd
+                if self.params['Output']['grism_source_image']:
+                    xs,xe,ys,ye = self.extractFromGrismImage(signalramp[0,:,:])  
+                  
+                for group in xrange(g):
+                    xtinput = signalramp[group,ys:ye,xs:xe]
+                    xtimage = self.crossTalkImage(xtinput,xtcoeffs)
+                
+                    #Now add the crosstalk image to the signalimage
+                    signalramp[group,ys:ye,xs:xe] += xtimage
+                #signalzero[ys:ye,xs:xe] += self.crossTalkImage(signalzero[ys:ye,xs:xe],xtcoeffs)
+
             else:
-                print("Moving targets integration done with point sources")
-                mov_targs_integration = mov_targs
-                mov_targs_zeroframe = mov_targs_zero
-        elif mov_targs_ext is not None:
-            print("Moving targets integration done with extended targets")
-            mov_targs_integration = mov_targs_ext
-            mov_targs_zeroframe = mov_targs_ext_zero
+                print("Crosstalk calculation requested, but the chosen subarray is read out using only 1 amplifier.")
+                print("Therefore there will be no crosstalk. Skipping this step.")
+
+        #Pixel Area Map 
+        if self.runStep['pixelAreaMap']:
+            pixAreaMap = self.simpleGetImage(self.params['Reffiles']['pixelAreaMap'])
+            
+            #If we are making a grism direct image, we need to embed the true pixel area
+            #map in an array of the appropriate dimension, where any pixels outside the
+            #actual aperture are set to 1.0
+            if self.params['Output']['grism_source_image']:
+                mapshape = pixAreaMap.shape
+                g,yd,xd = signalramp.shape
+                pam = np.ones((yd,xd))
+                ys = self.coord_adjust['yoffset']
+                xs = self.coord_adjust['xoffset']
+                pam[ys:ys+mapshape[0],xs:xs+mapshape[1]] = np.copy(pixAreaMap)
+                pixAreaMap = pam
+
+            signalramp *= pixAreaMap
+            #signalzero *= pixAreaMap
+
+        #save the combined static+moving targets ramp
+        if self.params['Output']['save_intermediates']:
+            h0=fits.PrimaryHDU()
+            h1 = fits.ImageHDU(signalramp)
+            hl=fits.HDUList([h0,h1])
+            hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_sources_plus_det_effects_ramp.fits',overwrite=True)
+
+
+
+        #If grism direct data is requested, then save the signal 
+        if self.params['Output']['grism_source_image']:
+            if ((self.params['Inst']['mode'].lower() == 'moving_target') or (mov_targs_integration is not None)):
+                #rearrange the RAPID mov_targs integration to the requested readout pattern
+                gd_integration = signalramp
+                if self.params['Readout']['readpatt'].upper() != 'RAPID':
+                    gd_integration = self.changeReadPattern(gd_integration,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
+
+                self.createGrismDirectData(gd_integration)
+            else:
+                self.createGrismDirectData(frameimage)
+
+            #If we continue after saving the grism direct image, then
+            #we need to chop down signalimage to the nominal aperture
+            #size.
+            if not self.params['Output']['grism_input_only']:
+                xs,xe,ys,ye = self.extractFromGrismImage(signalramp[0,:,:]) 
+                signalramp = signalramp[:,ys:ye,xs:xe]
+                #signalzero = signalzero[ys:ye,xs:xe]
+                print('Simulated signal data cropped back down to nominal shape ({}), and proceeding.'.format(signalramp.shape))
+            else:
+                print("grism_input_only set to True in {}. Quitting.".format(self.paramfile))
+                sys.exit()
+
+
+                #above here, signalramp is always RAPID, and always the full ramp, even if there
+                #are no moving targets. 
 
 
         #read in cosmic ray library files if CRs are to be added to the data later
@@ -326,11 +494,14 @@ class RampSim():
         #If some or all of the pixels will be combined using the proper method,
         #do that here
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            proper_ramp,proper_zero = self.doProperCombine(frameimage,mov_targs_integration,mov_targs_zeroframe,self.sbAndRefpixEffects,zeroModel.data[0,0,:,:],zero_sbAndRefEffects)
-            
+            proper_ramp,proper_zero = self.doProperCombine(signalramp,self.sbAndRefpixEffects,zeroModel.data[0,0,:,:],zero_sbAndRefEffects)
+
+
         #If the standard method will be used for at least some pixels, do that here.
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','STANDARD']:
-            standard_ramp,standard_zero = self.doStandardCombine(frameimage,mov_targs_integration,mov_targs_zeroframe)
+            print('rework dostandardcombine to handle signalramp, which can be 3d, and signalzero')
+            sys.exit()
+            standard_ramp,standard_zero = self.doStandardCombine(signalramp,mov_targs_integration,mov_targs_zeroframe) 
 
         #If the proper technique is being used on hot pixels and the standard technique
         #on darker pixels, then combine the results here.
@@ -376,9 +547,233 @@ class RampSim():
         if self.params['Output']['format'].upper() == 'DMS':
             print("Saving integration in DMS format.")
             self.saveDMS(final_ramp,final_zero,self.params['Output']['file'])
+            if stp_flag:
+                set_telescope_pointing.add_wcs(self.params['Output']['file'])
+            else:
+                print("Unable to import set_telescope_pointing.py. This must be run on the")
+                print("simulated ramps prior to running the assign_wcs step of the pipeline.")
+                print("Once found, run with: set_telescope_pointing.py filename, or from")
+                print("within python: set_telescope_pointing.add_wcs(filename)")
         else:
             print("Saving the output data in a format other than DMS not yet implemented!!!")
             sys.exit()
+
+
+    def nonsidereal_CRImage(self,file):
+        #create countrate image of non-sidereal sources that are being tracked.
+
+        #get countrate for mag 15 source, for scaling later
+        try:
+            mag15rate = self.countvalues[self.params['Readout']['filter']]
+        except:
+            print("Unable to find mag 15 countrate for {} filter in {}.".format(self.params['Readout']['filter'],self.params['Reffiles']['phot']))
+            sys.exit()
+
+
+        totalCRList = []
+
+        #read in file containing targets
+        targs,pixFlag,velFlag = self.readMTFile(self.params['simSignals']['movingTargetToTrack'])
+        
+        #We need to keep track of the proper motion of the target being tracked, because
+        #all other objects in the field of view will be moving at the same rate in the 
+        #opposite direction
+        track_ra_vel = targs[0]['x_or_RA_velocity']
+        track_dec_vel = targs[0]['y_or_Dec_velocity']
+
+        #sort the targets by whether they are point sources, galaxies, extended
+        ptsrc_rows = []
+        galaxy_rows = []
+        extended_rows = []
+        for i,line in enumerate(targs):
+            if 'point' in line['object'].lower():
+                ptsrc_rows.append(i)
+            elif 'sersic' in line['object'].lower():
+                galaxy_rows.append(i)
+            else:
+                extended_rows.append(i)
+
+        #then re-use functions for the sidereal tracking situation
+        if len(ptsrc_rows) > 0:
+            ptsrc = targs[ptsrc_rows]
+            if pixFlag:
+                meta0 = 'position_pixel'
+            else:
+                meta0 = ''
+            if velFlag:
+                meta1 = 'velocity_pixel'
+            else:
+                meta1 = ''
+            meta2 = 'Point sources with non-sidereal tracking. File produced by ramp_simulator.py'
+            meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
+            ptsrc.meta['comments'] = [meta0,meta1,meta2,meta3]
+            ptsrc.write('temp_non_sidereal_point_sources.list',format='ascii',overwrite=True)
+
+            ptsrc = self.getPointSourceList('temp_non_sidereal_point_sources.list')
+            ptsrcCRImage = self.makePointSourceImage(ptsrc)
+            totalCRList.append(ptsrcCRImage)
+
+        if len(galaxy_rows) > 0:
+            galaxies = targs[galaxy_rows]
+            if pixFlag:
+                meta0 = 'position_pixel'
+            else:
+                meta0 = ''
+            if velFlag:
+                meta1 = 'velocity_pixel'
+            else:
+                meta1 = ''
+            meta2 = 'Galaxies (2d sersic profiles) with non-sidereal tracking. File produced by ramp_simulator.py'
+            meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
+            galaxies.meta['comments'] = [meta0,meta1,meta2,meta3]
+            galaxies.write('temp_non_sidereal_sersic_sources.list',format='ascii',overwrite=True)
+            
+            #read in the PSF file with centered source
+            wfe = self.params['simSignals']['psfwfe']
+            wfegroup = self.params['simSignals']['psfwfegroup']
+            basename = self.params['simSignals']['psfbasename'] + '_'
+            if wfe == 0:
+                psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
+            else:
+                psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
+
+            centerpsffile = self.params['simSignals']['psfpath'] + psfname + '_0p0_0p0.fits'
+            try:
+                centerpsf = fits.getdata(centerpsffile)
+            except:
+                print('Unable to read in PSF file for non sidereal moving target sersic work. {}'.format(centerpsffile))
+                sys.exit()
+
+            #crop the psf such that it is centered in its array
+            centerpsf = self.cropPSF(centerpsf)
+
+            #normalize the PSF to a total signal of 1.0
+            totalsignal = np.sum(centerpsf)
+            centerpsf = centerpsf / totalsignal
+
+            galaxyCRImage = self.makeGalaxyImage('temp_non_sidereal_sersic_sources.list',centerpsf)
+            totalCRList.append(galaxyCRImage)
+
+        if len(extended_rows) > 0:
+            extended = targs[extended_rows]
+
+            if pixFlag:
+                meta0 = 'position_pixel'
+            else:
+                meta0 = ''
+            if velFlag:
+                meta1 = 'velocity_pixel'
+            else:
+                meta1 = ''
+            meta2 = 'Extended sources with non-sidereal tracking. File produced by ramp_simulator.py'
+            meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
+            extended.meta['comments'] = [meta0,meta1,meta2,meta3]
+            extended.write('temp_non_sidereal_extended_sources.list',format='ascii',overwrite=True)
+            
+            #read in the PSF file with centered source
+            wfe = self.params['simSignals']['psfwfe']
+            wfegroup = self.params['simSignals']['psfwfegroup']
+            basename = self.params['simSignals']['psfbasename'] + '_'
+            if wfe == 0:
+                psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
+            else:
+                psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
+
+            centerpsffile = self.params['simSignals']['psfpath'] + psfname + '_0p0_0p0.fits'
+            try:
+                centerpsf = fits.getdata(centerpsffile)
+            except:
+                print('Unable to read in PSF file for non sidereal moving target sersic work. {}'.format(centerpsffile))
+                sys.exit()
+
+            #crop the psf such that it is centered in its array
+            centerpsf = self.cropPSF(centerpsf)
+
+            #normalize the PSF to a total signal of 1.0
+            totalsignal = np.sum(centerpsf)
+            centerpsf = centerpsf / totalsignal
+
+            #ext_src, extpixflag = self.readPointSourceFile(self.params['simSignals']['extended'])
+            extlist,extstamps = self.getExtendedSourceList('temp_non_sidereal_extended_sources.list')
+
+            #translate the extended source list into an image
+            extCRImage = self.makeExtendedSourceImage(extlist,extstamps)
+
+            #if requested, convolve the stamp images with the NIRCam PSF
+            if self.params['simSignals']['PSFConvolveExtended']:
+                extCRImage = s1.fftconvolve(extimage,centerpsf,mode='same')
+
+            totalCRList.append(extCRImage)
+
+        #Now combine into a final countrate image of non-sidereal sources (that are being tracked)
+        if len(totalCRList) > 0:
+            totalCRImage = totalCRList[0]
+            if len(totalCRList) > 1:
+                for i in xrange(1,len(totalCRList)):
+                    totalCRImage += totalCRList[i]
+        else:
+            print("No non-sidereal countrate targets produced.")
+            print("You shouldn't be here.")
+            sys.exit()
+
+        return totalCRImage,track_ra_vel,track_dec_vel,velFlag
+
+
+    def combineSimulatedDataSources(self,inputtype,input1,input1_zero,mov_tar_ramp):
+        #inputtype can be 'countrate' in which case input needs to be made
+        #into a ramp before combining with mov_tar_ramp, or 'ramp' in which
+        #case you can combine directly. Use 'ramp' with
+        #moving_target MODE data, and 'countrate' with imaging MODE data
+
+        #Combine the countrate image with the moving target ramp.
+
+        if inputtype == 'countrate':
+            #First change the countrate image into a ramp
+            yd,xd = input1.shape
+            num_frames = self.params['Readout']['ngroup'] * (self.params['Readout']['nframe'] + self.params['Readout']['nskip'])
+            print("Countrate image of synthetic signals being converted to RAPID integration with {} frames.".format(num_frames))
+            input1_ramp = np.zeros((num_frames,yd,xd))
+            for i in xrange(num_frames):
+                input1_ramp[i,:,:] = input1 * self.frametime * (i+1)
+
+        else:
+            #if input1 is a ramp rather than a countrate image
+            input1_ramp = input1
+
+        #combine the input1 ramp and the moving target ramp, which are
+        #now in the same readout pattern
+
+        totalinput = input1_ramp + mov_tar_ramp
+        #totalzero = input1_zero + mov_tar_zero
+        return totalinput#,totalzero
+
+
+
+    def createGrismDirectData(self,input):
+        #Create the grism direct image or ramp to be saved 
+        #Save as a 3D cube regardless of the dimensions of the inputs
+
+        arrayshape = input.shape
+        if len(arrayshape) == 2:
+            #make 3D for easier coding below
+            input = np.expand_dims(input,axis=0)
+            units = 'e-/sec'
+            indim = 2
+            yd,xd = arrayshape
+        elif len(arrayshape) == 3:
+            units = 'e-'
+            indim = 3
+            g,yd,xd = arrayshape
+
+        grismDirectName = self.params['Output']['file'][0:-5] + '_GrismDirectData.fits'
+        xcent_fov = xd / 2
+        ycent_fov = yd / 2
+        kw = {}
+        kw['xcenter'] = xcent_fov
+        kw['ycenter'] = ycent_fov
+        kw['units'] = units
+        self.saveSingleFits(input,grismDirectName,key_dict=kw)
+        print("Data to be used as input to make dispersed grism image(s) saved as {}".format(grismDirectName))
 
 
     def changeReadPattern(self,array,outnframe,outnskip,outngroup):
@@ -390,13 +785,10 @@ class RampSim():
         #total number of frames per group
         deltaframe = outnskip + outnframe
 
-        #indexes of frames to average
-        frames = np.arange(outnskip,deltaframe)
-        #accumimage = np.zeros((iny,inx),dtype=np.int32)
-
         #Loop over groups
         for i in range(outngroup):
             #average together the appropriate frames, skip the appropriate frames
+            frames = np.arange(i*deltaframe,i*deltaframe+outnframe)
 
             #If averaging needs to be done
             if outnframe > 1:
@@ -411,19 +803,12 @@ class RampSim():
 
 
 
-    def movingTargetInputs(self,file,mode):
+    def movingTargetInputs(self,file,input_type,MT_tracking=False,tracking_ra_vel=None,tracking_dec_vel=None,trackingPixVelFlag=False):
+
         #read in listfile of moving targets and perform needed calculations to get inputs
         #for moving_targets.py
 
-        #outputs
-        #target_dict = {}
-        #dictionary? or just a list of tuples?
-
-        #mode can be 'TSO' or 'movingTarget'
-
-        #TRY TO MAKE THIS FUNCTION FLEXIBLE, SO THAT WE CAN USE IT FOR THE POINT SOURCE
-        #MOVING TARGETS, EXTENDED MOVING TARGETS, AND ALSO THE TSO MODE, WHERE THE INPUTS
-        #WILL BE THE POINT SOURCE LIST, GALAXY LIST, AND EXTENDED IMAGE.
+        #input_type can be 'pointSource','galaxies', or 'extended'
 
         #get countrate for mag 15 source, for scaling later
         try:
@@ -433,12 +818,13 @@ class RampSim():
             print("Fix me!")
             sys.exit()
 
-        #read input file
-        if self.runStep['movingTargets']:
-            mtlist,pixelFlag,pixvelflag = self.readMTFile(file)
-        elif self.runStep['TSO']:
-            print('fixme! implement TSO')
-            sys.exit()
+        #read input file - should be able to use for all modes
+        mtlist,pixelFlag,pixvelflag = self.readMTFile(file) 
+
+        if MT_tracking == True:
+            mtlist['x_or_RA_velocity'] = tracking_ra_vel * (1./365.25/24.)
+            mtlist['y_or_Dec_velocity'] = tracking_dec_vel * (1./365.25/24.)
+            pixvelflag = trackingPixVelFlag
 
         #get necessary information for coordinate transformations
         coord_transform = None
@@ -455,13 +841,6 @@ class RampSim():
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
         attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
 
-        if mode == 'TSO':
-            #calculate the velocity of the telescope slew in arcsec/sec
-            print('still need to implement. Fix me!!!')
-            sys.exit()
-            ra_vel = 0.0
-            dec_vel = 0.0
-
         #exposure times for all frames
         frameexptimes = self.frametime * np.arange(-1,self.params['Readout']['ngroup'] * (self.params['Readout']['nframe'] + self.params['Readout']['nskip']))
             
@@ -469,20 +848,37 @@ class RampSim():
         dims = np.array(self.dark.data[0,0,:,:].shape)
         newdimsx = np.int(dims[1] * self.coord_adjust['x'])
         newdimsy = np.int(dims[0] * self.coord_adjust['y'])
+
+        print('moving target output frame dimensions:')
+        print(newdimsx,newdimsy)
+
         mt_integration = np.zeros((len(frameexptimes)-1,newdimsy,newdimsx))
+
+        #Read in PSF for later convolution
+        psffile = self.params['simSignals']['psfpath'] + self.params['simSignals']['psfbasename'] + '_' + self.params['Readout']['filter'].lower() + '_' + str(self.params['simSignals']['psfwfe']) + '_' + str(self.params['simSignals']['psfwfegroup']) + '_0p0_0p0.fits'
+        centerpsf = fits.getdata(psffile)
+        centerpsf = self.cropPSF(centerpsf)
+
+        #normalize the PSF to a total signal of 1.0
+        totalsignal = np.sum(centerpsf)
+        centerpsf /= totalsignal
 
         for entry in mtlist:
 
             #for each object, calculate x,y or ra,dec of initial position
-            pixelx,pixely,ra,dec,ra_str,dec_str = self.getPositions(entry[0],entry[1],attitude_matrix,coord_transform,pixelFlag)
-
-            print("got initial x,y for moving target")
+            pixelx,pixely,ra,dec,ra_str,dec_str = self.getPositions(entry['x_or_RA'],entry['y_or_Dec'],attitude_matrix,coord_transform,pixelFlag)
 
             #now generate a list of x,y position in each frame
             if pixvelflag == False:
                 #calculate the RA,Dec in each frame
-                ra_frames = ra + (entry[3]/3600.) * frameexptimes
-                dec_frames = dec + (entry[4]/3600.) * frameexptimes
+                #input velocities are arcsec/hour. ra/dec are in units of degrees,
+                #so divide velocities by 3600^2.
+                ra_frames = ra + (entry['x_or_RA_velocity']/3600./3600.) * frameexptimes
+                dec_frames = dec + (entry['y_or_Dec_velocity']/3600./3600.) * frameexptimes
+
+                #print('RA,Dec velocities per sec are: {},{}'.format(entry['x_or_RA_velocity']/3600.,entry['y_or_Dec_velocity']/3600.))
+                #print('RA frames {}'.format(ra_frames))
+                #print('Dec frames {}'.format(dec_frames))
 
                 x_frames = []
                 y_frames = []
@@ -497,21 +893,41 @@ class RampSim():
             else:
                 #if input velocities are pixels/hour, then generate the list of
                 #x,y in each frame directly
-                x_frames = pixelx + (entry[3]/3600.) * frameexptimes
-                y_frames = pixely + (entry[4]/3600.) * frameexptimes
-                        
-                
+                x_frames = pixelx + (entry['x_or_RA_velocity']/3600.) * frameexptimes
+                y_frames = pixely + (entry['y_or_Dec_velocity']/3600.) * frameexptimes
+                      
+                      
+            #If the target never falls on the detector, then move on to the next target
+            xfdiffs = np.fabs(x_frames - (newdimsx/2))
+            yfdiffs = np.fabs(y_frames - (newdimsy/2))
+            if np.min(xfdiffs) > (newdimsx/2) or np.min(yfdiffs) > (newdimsy/2):
+                continue
+
             #So now we have xinit,yinit, a list of x,y positions for each frame, and the frametime.
             #subsample factor can be hardwired for now. outx and outy are also known. So all we need is the stamp
             #image, then we can call moving_targets.py and feed it these things, which contain all the info needed
 
-            if mode == 'movingTarget':
-                psffile = self.params['simSignals']['psfpath'] + self.params['simSignals']['psfbasename'] + '_' + self.params['Readout']['filter'].lower() + '_' + str(self.params['simSignals']['psfwfe']) + '_' + str(self.params['simSignals']['psfwfegroup']) + '_0p0_0p0.fits'
+            if input_type == 'pointSource':
+                stamp = centerpsf
 
-                stamp = fits.getdata(psffile)
-            elif mode == 'movingTargetExtended':
-                #stamp = self.getData(entry[0])
-                stamp = self.getImage(entry[0],arrayshape,rotateflag,angle,place=[0,0]) 
+            elif input_type == 'extended':
+                stamp,header = self.basicGetImage(entry['filename'])
+                if entry['pos_angle'] != 0.:
+                    stamp = self.basicRotateImage(stamp,entry['pos_angle'])
+
+                #convolve with NIRCam PSF if requested
+                if self.params['simSignals']['PSFConvolveExtended']:
+                    stamp = s1.fftconvolve(stamp,centerpsf,mode='same')
+
+            elif input_type == 'galaxies':
+                stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],entry['pos_angle'],1.) #entry['counts_per_frame_e'])
+                #convolve the galaxy with the NIRCam PSF
+                stamp = s1.fftconvolve(stamp,centerpsf,mode='same')
+
+
+            #normalize the PSF to a total signal of 1.0
+            totalsignal = np.sum(stamp)
+            stamp /= totalsignal
 
             #Scale the stamp image to the requested magnitude
             scale = 10.**(0.4*(15.0-entry['magnitude']))
@@ -528,12 +944,12 @@ class RampSim():
             mt_integration += mt.create(stamp,x_frames,y_frames,self.frametime,newdimsx,newdimsy)
 
         #save the moving target input integration
-        if self.params['Output']['save_intermediates']:
-            h0 = fits.PrimaryHDU(mt_integration)
-            hl = fits.HDUList([h0])
-            mtoutname = self.params['Output']['file'][0:-5] + '_movingTargetIntegration.fits'
-            hl.writeto(mtoutname,clobber=True)
-            print("Integration showing only moving targets saved to {}".format(mtoutname))
+        #if self.params['Output']['save_intermediates']:
+        #    h0 = fits.PrimaryHDU(mt_integration)
+        #    hl = fits.HDUList([h0])
+        #    mtoutname = self.params['Output']['file'][0:-5] + '_movingTargetIntegration.fits'
+        #    hl.writeto(mtoutname,overwrite=True)
+        #    print("Integration showing only moving targets saved to {}".format(mtoutname))
 
         return mt_integration
 
@@ -586,7 +1002,9 @@ class RampSim():
 
         dtor = math.radians(1.)
 
-        if self.params['Inst']['mode'] == 'tso':
+        if 1<0:
+        #if self.params['Inst']['mode'] == 'moving_target':
+            print("I don't think we need this section")
             grouptime = self.frametime * (self.params['Readout']['nframe'] + self.params['Readout']['nskip'])
             inttime = grouptime * self.params['Readout']['ngroup']
             slewDist = self.params['Telescope']['slewRate'] * inttime #arcsecs
@@ -603,9 +1021,9 @@ class RampSim():
             self.coord_adjust['xoffset'] = 0.
             self.coord_adjust['yoffset'] = 0.
            
-            print('total integration time {}. total slew in arcsec {}'.format(inttime,slewDist))
-            print('slew in pixels {} {}, slew in arcsec {} {}:'.format(slewPixx,slewPixy,slewDistx,slewDisty))
-            print('factors {} {}'.format(self.coord_adjust['x'],self.coord_adjust['y']))
+            #print('total integration time {}. total slew in arcsec {}'.format(inttime,slewDist))
+            #print('slew in pixels {} {}, slew in arcsec {} {}:'.format(slewPixx,slewPixy,slewDistx,slewDisty))
+            #print('factors {} {}'.format(self.coord_adjust['x'],self.coord_adjust['y']))
 
             #requested TSO AND grism direct image
             if self.params['Output']['grism_source_image']:
@@ -711,6 +1129,8 @@ class RampSim():
 
         #Add moving targets integration if present
         if moving_targs is not None:
+            print(standard_ramp.shape)
+            print(moving_targs.shape)
             standard_ramp += moving_targs
             if standard_zeroframe is not None:
                 standard_zeroframe += moving_targs_zero
@@ -719,22 +1139,13 @@ class RampSim():
 
 
 
-    def doProperCombine(self,signalimage,moving_targs_int,moving_targs_zeroframe,refpix_effects,zeroframe,zeroRefEffects):
+    def doProperCombine(self,signalimage,refpix_effects,zeroframe,zeroRefEffects):
         #make linear synthetic ramp, including any necessary frame averaging
         print('Creating a synthetic signal ramp from the synthetic signal rate image using the proper technique.')
 
-        if self.params['Inst']['mode'] != 'tso':
-            syn_linear_ramp,syn_linear_zero = self.frameToRamp(signalimage)
-        else:
-            #When creating a TSO ramp, start with a signal rate image rather than an image
-            #of the signal per frame
-            print('If distortion is added when signalimage is created, you need to remove it here')
-            print('since the scene will be different for each group here. distortion will have to be')
-            print('added once each group is created. Maybe this argues that that should be the standard')
-            print('practice for all modes.')
-            sys.exit()
-            syn_linear_ramp,syn_linear_zero = self.TSOframeToRamp(signalimage/self.frametime)
-
+        #add cosmic rays, divide by gain to get into units of ADU, and put into the
+        #requested readout pattern
+        syn_linear_ramp,syn_linear_zero = self.prepSynRamp(signalimage)
 
         #Ensure that no signals are present in the reference pixels if present
         #by using a mask
@@ -765,11 +1176,6 @@ class RampSim():
         else:
             lin_zeroframe = None
 
-        #Add the moving target integration if it is present
-        if moving_targs_int is not None:
-            lin_outramp += moving_targs_int
-            if lin_zeroframe is not None:
-                lin_zeroframe += moving_targs_zeroframe
 
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
@@ -805,11 +1211,11 @@ class RampSim():
             properzero = lin_zeroframe
 
         #Save for testing
-        h0 = fits.PrimaryHDU()
-        h1 = fits.ImageHDU(properramp)
-        hl = fits.HDUList([h0,h1])
-        ffff = self.params['Output']['file'][0:-5] + '_synPlusDark_addNonlin.fits'
-        hl.writeto(ffff,clobber=True)
+        #h0 = fits.PrimaryHDU()
+        #h1 = fits.ImageHDU(properramp)
+        #hl = fits.HDUList([h0,h1])
+        #ffff = self.params['Output']['file'][0:-5] + '_synPlusDark_addNonlin.fits'
+        #hl.writeto(ffff,overwrite=True)
 
 
         #Look for pixels with crazy values. These are most likely due to the Newton's Method being
@@ -817,7 +1223,6 @@ class RampSim():
         #or a bad initial guess. Set these pixels' signals to zero
         bad = ((properramp < -100) | (properramp > 1e5))
         badlast = ((properramp[-1,:,:] < -100) | (properramp[-1,:,:] > 1e5))
-        #properramp[bad] = 0.
         numbad = np.sum(badlast)
         yb,xb = properramp[-1,:,:].shape
         print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*1./(xb*yb)))
@@ -830,14 +1235,18 @@ class RampSim():
             h1 = fits.ImageHDU(nonconvmap)
             hl = fits.HDUList([h0,h1])
             crazymap = self.params['Output']['file'][0:-5] + '_synPlusDark_lin_nonconverging_pix.fits'
-            hl.writeto(crazymap,clobber=True)
+            hl.writeto(crazymap,overwrite=True)
             print("A map of these pixels has been saved to {}".format(crazymap))
 
         #Now add the superbias and reference pixel effects back into the ramp to get it back
         #to a 'raw' state
-        properramp += refpix_effects[0,:,:,:]
-        properzero += zeroRefEffects
+        if refpix_effects is not None:
+            properramp += refpix_effects[0,:,:,:]
+            properzero += zeroRefEffects
 
+        #Set the bad pixels to zero
+        properramp[bad] = 0.
+            
         #To simulate raw data, we need integers
         properramp = np.around(properramp)
         properramp = properramp.astype(np.int32)
@@ -942,12 +1351,6 @@ class RampSim():
                     workimage = newsignalimage - oldsignalimage
                     oldsignalimage = np.copy(newsignalimage)
 
-                    #print('signal added to previous read before making int: ',workimage[799,803])
-                    
-                    #print('max,min values in non-linearized image after nonlin',np.nanmax(newsignalimage),np.nanmin(newsignalimage))
-                    #print('max,min values in workimage after nonlin',np.nanmax(workimage),np.nanmin(workimage))
-
-                    
                 #Here is where we check to see which frame we are working on.
                 #If NSKIP != 0, then make sure we're working on a frame that is
                 #kept before proceeding. It's important to update totalsignalimage,
@@ -959,7 +1362,6 @@ class RampSim():
                 #NOTE: any NaN values will be translated into -2147483648
                 workimage = np.around(workimage)
                 workimage = workimage.astype(np.int32)
-                #print('signal added to previous read after making int: ',workimage[799,803])
                     
                 #if the frame is one that is kept (one of the last nframe frames):
                 if j >= self.params['Readout']['nskip']:
@@ -1027,7 +1429,7 @@ class RampSim():
             h1 = fits.ImageHDU(nonconvmap)
             hl = fits.HDUList([h0,h1])
             crazymap = self.params['Output']['file'][0:-5] + '_lin_nonconverging_pix.fits'
-            hl.writeto(crazymap,clobber=True)
+            hl.writeto(crazymap,overwrite=True)
             print("A map of these pixels has been saved to {}".format(crazymap))
 
         return outimage,zframe
@@ -1053,7 +1455,6 @@ class RampSim():
         print('Creating a linearized version of the dark current input ramp.')
         
         #Run the DQ_Init step
-        #print(self.params['newRamp']['dq_configfile'],os.path.isfile(self.params['newRamp']['dq_configfile']))
         linDark = DQInitStep.call(dark,config_file=self.params['newRamp']['dq_configfile'])
         
         #If the saturation map is provided, use it. If not, default to whatever is in CRDS
@@ -1064,6 +1465,7 @@ class RampSim():
 
         #If the superbias file is provided, use it. If not, default to whatever is in CRDS
         if self.runStep['superbias']:
+            print('input data shape: {}'.format(linDark.data.shape))
             linDark = SuperBiasStep.call(linDark,config_file=self.params['newRamp']['superbias_configfile'],override_superbias=self.params['Reffiles']['superbias'])
         else:
             linDark = SuperBiasStep.call(linDark,config_file=self.params['newRamp']['superbias_configfile'])
@@ -1075,7 +1477,7 @@ class RampSim():
             h0=fits.PrimaryHDU()
             h1 = fits.ImageHDU(linDark.data)
             hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_sbSubbedDark.fits',clobber=True)
+            hl.writeto(self.params['Output']['file'][0:-5] + '_sbSubbedDark.fits',overwrite=True)
 
 
         #Reference pixel correction
@@ -1088,7 +1490,7 @@ class RampSim():
             h0=fits.PrimaryHDU()
             h1 = fits.ImageHDU(linDark.data)
             hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_sbAndRefpixSubbedDark.fits',clobber=True)
+            hl.writeto(self.params['Output']['file'][0:-5] + '_sbAndRefpixSubbedDark.fits',overwrite=True)
 
 
         #save a copy of the superbias- and reference pixel-subtracted dark. This will be used later
@@ -1119,6 +1521,17 @@ class RampSim():
             print('WARNING: Unable to read in linearized dark ramp.')
             sys.exit()
             
+        #Check the readout pattern of the dark. If it is RAPID, then we need to keep
+        #the zeroframe
+        rp = self.linDark.meta.exposure.readpatt
+        if rp.lower() == 'rapid':
+            zero = self.linDark.data[0,0,:,:]
+        else:
+            zero = None
+
+        return zero
+
+
     def saveDMS(self,ramp,zeroframe,filename):
         #save the new, simulated integration in DMS format (i.e. DMS orientation 
         #rather than raw fitswriter orientation, and using SSBs RampModel)
@@ -1150,7 +1563,7 @@ class RampSim():
 
         #EXPTYPE OPTIONS
         #exptypes = ['NRC_IMAGE','NRC_GRISM','NRC_TACQ','NRC_CORON','NRC_DARK']
-        if self.params['Inst']['mode'].lower() == 'imaging':
+        if self.params['Inst']['mode'].lower() != 'wfss':
             self.dark.meta.exposure.type = 'NRC_IMAGE'
         else:
             print('EXPTYPE mapping not complete for this!!! FIX ME!')
@@ -1162,13 +1575,14 @@ class RampSim():
         pixelsize = self.pixscale[0] / 3600.0
 
         current_time = datetime.datetime.utcnow()
+        ct = Time(current_time)
         reference_time = datetime.datetime(2000,1,1,0,0,0)
         delta = current_time-reference_time
         et = delta.total_seconds()
         hmjd = 51544.5 + et/86400.0
         self.dark.meta.date = current_time.strftime('%Y-%m-%dT%H:%M:%S')
         self.dark.meta.telescope = 'JWST'
-
+        
         self.dark.meta.instrument.name = self.params['Inst']['instrument'].upper()
         self.dark.meta.coordinates.reference_frame = 'ICRS'
 
@@ -1203,16 +1617,18 @@ class RampSim():
         self.dark.meta.wcsinfo.ctype2 = 'DEC--TAN'
         self.dark.meta.wcsinfo.cunit1 = 'deg' 
         self.dark.meta.wcsinfo.cunit2 = 'deg'
-
-
-        #ra = self.params['Telescope']['ra']
-        #colon = self.ra.find(':')
-        #ranum = int(ra[0:colon]) + float(ra[colon+1:colon+3])/60. + float(ra[colon+4:])/3600.
+        self.dark.meta.wcsinfo.v2_ref = self.v2_ref
+        self.dark.meta.wcsinfo.v3_ref = self.v3_ref
+        self.dark.meta.wcsinfo.vparity = self.parity
+        self.dark.meta.wcsinfo.v3yangle = self.v3yang
+        
         self.dark.meta.target.ra = self.ra
-        #dec = self.parameters["dec"] 
-        #colon = dec.find(':')
-        #decnum = int(dec[0:colon]) + float(dec[colon+1:colon+3])/60. + float(dec[colon+4:])/3600.
         self.dark.meta.target.dec = self.dec
+
+        #ra_v1, dec_v1, and pa_v3 are not used by the level 2 pipelines
+        self.dark.meta.pointing.ra_v1 = self.ra
+        self.dark.meta.pointing.dec_v1 = self.dec
+        self.dark.meta.pointing.pa_v3 = self.params['Telescope']['rotation']
 
         ramptime = self.frametime*(2+self.params['Readout']['ngroup']*self.params['Readout']['nframe'])
         #Add time for the reset frame....
@@ -1245,13 +1661,13 @@ class RampSim():
             fwpw['pupil_wheel'] = self.params['Readout']['pupil']
 
         #get the proper filter wheel and pupil wheel values for the header
-        if self.params['Inst']['mode'].lower() == 'imaging':
+        if self.params['Inst']['mode'].lower() != 'wfss':
             mtch = fwpw['filter'] == self.params['Readout']['filter'].upper()
             fw = str(fwpw['filter_wheel'].data[mtch][0])
             pw = str(fwpw['pupil_wheel'].data[mtch][0])
 
         #grism element
-        if self.params['Inst']['mode'] == 'imaging':
+        if self.params['Inst']['mode'].lower() != 'wfss':
             grism='N/A'
         else:
             grism=fw
@@ -1309,6 +1725,12 @@ class RampSim():
         self.dark.meta.exposure.nresets_between_ints = 1
         self.dark.meta.exposure.integration_time = rampexptime
         self.dark.meta.exposure.exposure_time = rampexptime #assumes only 1 integration per exposure
+
+        #set the exposure start time as the current time
+        self.dark.meta.exposure.start_time = ct.mjd
+        self.dark.meta.exposure.end_time = ct.mjd + rampexptime/3600./24.
+        self.dark.meta.exposure.mid_time = ct.mjd + rampexptime/3600./24./2.
+
         self.dark.meta.exposure.duration = ramptime
 
         self.dark.save(filename)
@@ -1320,12 +1742,75 @@ class RampSim():
         self.cosmicrays=[]
         self.cosmicraysheader=[]
         for i in range(10):
-            str1='_%2.2d_IPC.fits' % (i)
+            idx = '_%2.2d_' % (i)
+            str1 = idx + self.params['cosmicRay']['suffix'] + '.fits'
+            #str1='_%2.2d_IPC.fits' % (i)
             name = self.crfile + str1
             #name = self.params['cosmicRay']['path'] + self.fileList['cosmicrays'] + str1
             im,head = self.readCalFile(name)
             self.cosmicrays.append(im)
             self.cosmicraysheader.append(head)
+
+    def prepSynRamp(self,ramp):
+        #input is noiseless ramp of simulated signals
+        #This ramp nominally comes from cases where moving targets
+        #are used (either satellites, KBOs moving relative to the 
+        #observation pointing, or non-sidereal tracking)
+        #Add poisson noise and cosmic rays to this ramp, and translate
+        #from electrons to ADU. 
+
+        #First, use a fake countrate image full of zeros and feed into
+        #frameToRamp, which will generate the cosmic rays, divide by the gain
+        #to put into ADU, and rearrange into the requested output read
+        #pattern
+        crs_only_ramp,crs_only_zero = self.frameToRamp(np.zeros_like(ramp[0,:,:]))
+        
+        #Now deal with the ramp containing the simulated signals. We need to add
+        #poisson noise to each frame, and divide by the gain
+        frames,yd,xd = ramp.shape
+
+        #read in gain map to be used below
+        if self.runStep['gain']:
+            gainim,gainhead = self.readCalFile(self.params['Reffiles']['gain'])
+            #set any NaN's to 1.0
+            bad = ~np.isfinite(gainim)
+            gainim[bad] = 1.0
+
+            #Pixels that have a gain value of 0 will be reset to have values of 1.0
+            zs = gainim == 0
+            gainim[zs] = 1.0
+            
+        #Add poisson noise and change each frame to ADU from electrons
+        deltaimage = np.zeros((frames-1,yd,xd))
+        for frame in xrange(1,frames):
+            deltaimage[frame-1,:,:] = ramp[frame,:,:] - ramp[frame-1,:,:]
+
+        workimage = self.doPoisson(ramp[0,:,:])
+        if self.runStep['gain']:
+            workimage /= gainim
+        ramp[0,:,:] = workimage
+
+        for frame in xrange(1,frames):
+            #add poisson noise 
+            poissonsignal = self.doPoisson(ramp[frame,:,:]) - ramp[frame,:,:]
+            ramp[frame,:,:] = ramp[frame-1,:,:] + deltaimage[frame-1,:,:] + poissonsignal
+
+        #apply the inverse gain to go from electrons to ADU
+        if self.runStep['gain']:
+            ramp /= gainim
+
+        #save the updated zero frame
+        zero = ramp[0,:,:] + crs_only_zero
+
+        #rearrange ramp into the requested readout pattern, to match crs_only_ramp
+        if self.params['Readout']['readpatt'].upper() != 'RAPID':
+            ramp = self.changeReadPattern(ramp,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
+
+        #Combine the simulated signal ramp with the cosmic rays
+        ramp = ramp + crs_only_ramp
+
+        return ramp,zero
+
 
     
     def frameToRamp(self,sigimage):
@@ -1388,16 +1873,10 @@ class RampSim():
                 #add poisson noise 
                 workimage = self.doPoisson(sigimage)
 
-                #xxx=1800
-                #yyy=800
-                #print('after poisson',sigimage[yyy,xxx],workimage[yyy,xxx])
-
                 #add cosmic rays
                 if self.runStep['cosmicray']:
                     workimage = self.doCosmicRays(workimage,i,j,self.params['Readout']['nframe'],crs_perframe[framenum])
                     framenum = framenum + 1
-
-                #print('after CR',workimage[yyy,xxx])
 
                 #apply the inverse gain to go from electrons to ADU
                 if self.runStep['gain']:
@@ -1407,9 +1886,6 @@ class RampSim():
                 #Keep track of the total signal in the ramp, so that we don't neglect
                 #signal which comes in during the frames that are skipped.
                 totalsignalimage = totalsignalimage + workimage
-
-                #print('after inv gain',workimage[yyy,xxx],totalsignalimage[yyy,xxx])
-
 
                 # now round off and truncate to integers, simulating the A/D conversion
                 # workimage is the signal accumulated in the current frame
@@ -1423,10 +1899,8 @@ class RampSim():
 
                     #if nframe is > 1, then we need to average the nframe frames and
                     #place that into the group.
-                    #print('j={}'.format(j))
                     if self.params['Readout']['nframe'] != 1:
                         print('averaging frame {}'.format(i*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])+j))
-                        #accumimage = accumimage + workimage/self.params['Readout']['nframe']
                         accumimage = accumimage + ((self.params['Readout']['nframe']-(j-self.params['Readout']['nskip']))*1./self.params['Readout']['nframe'])*workimage
                     else:
                         #if nframe=1, then no averaging is necessary
@@ -1440,8 +1914,6 @@ class RampSim():
                     print('skipping frame {}'.format(i*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])+j))
                     accumimage = accumimage + workimage
 
-                #print(workimage[yyy,xxx],accumimage[yyy,xxx])
-
 
                 #if this is the zeroth frame of the integration, save for possible output
                 if ((i == 0) & (j == 0) & (self.dark.meta.exposure.readpatt == 'RAPID')):
@@ -1453,7 +1925,6 @@ class RampSim():
                 outimage[i,:,:] = outimage[i-1,:,:] + accumimage + delta
             else:
                 outimage[i,:,:] = accumimage
-            #print('final output signal: ',outimage[i,799,803])
             print("Group {} has been generated.".format(i+1))
 
             #Calculate the delta between outimage and the last iteration of newsignal. This needs to be
@@ -1469,6 +1940,7 @@ class RampSim():
 
 
     def TSOframeToRamp(self,sigimage):
+        #CURRENTLY NOT USED
         #Once we have a frame that contains the signal added from external sources, 
         #we need to adjust these signals to account for detector effects (poisson
         #noise, gain, and we need to add cosmic rays if requested. For time series
@@ -1644,21 +2116,13 @@ class RampSim():
             darkzero = dark.data[0,0,:,:]
             if syn_zeroframe is not None:
                 zeroframe = darkzero + syn_zeroframe
-            #else:
-            #    zeroframe = darkzero + synthetic[0,:,:]
         else:
-            print("Unable to save the zeroth frame because the input dark current ramp is not RAPID.")
             zeroframe = None
             
         #We have already guaranteed that either the readpatterns match
         #or the dark is RAPID, so no need to worry about checking for 
         #other cases here.
 
-        #if readpatt of dark  == RAPID and readpatt of output != RAPID: then averaging.
-        #else, no averaging
-
-        #print('IN ADDSYNTHETICTODARK, DARKPATTERN IS {} AND REQ PATTERN IS {}'.format(darkpatt,self.params['Readout']['readpatt']))
-        
         if ((darkpatt == 'RAPID') and (self.params['Readout']['readpatt'] != 'RAPID')): 
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
@@ -1721,6 +2185,7 @@ class RampSim():
         darkzero = None
         if (darkpatt == 'RAPID'):
             darkzero = dark.data[0,0,:,:]
+            print("Saving 0th frame to save in a separate extension")
         else:
             print("Unable to save the zeroth frame because the input dark current ramp is not RAPID.")
             
@@ -1779,6 +2244,7 @@ class RampSim():
         dark.meta.exposure.readpatt = self.params['Readout']['readpatt'] 
         dark.meta.exposure.nframes = self.params['Readout']['nframe']
         dark.meta.exposure.nskip = self.params['Readout']['nskip']
+        dark.meta.exposure.ngroups = self.params['Readout']['ngroup']
         dark.err = np.expand_dims(outerr,axis=0)
         dark.groupdq = np.expand_dims(outgdq,axis=0)
         
@@ -1800,11 +2266,6 @@ class RampSim():
         #the input linear image
         lin_satmap = self.nonLinFunc(sat,coeffs,sat)
 
-        #xx=803
-        #yy=799
-        #print('pixel {},{}, satmap {}, lin_satmap {}'.format(xx,yy,sat[yy,xx],lin_satmap[yy,xx]))
-
-        
         #find pixels with "good" signals, to have the nonlin applied. Negative pix or pix with
         #signals above the requested max value will not be changed.
         x = np.copy(image)
@@ -1822,84 +2283,40 @@ class RampSim():
         val[i2]=1.
 
 
-        #print inputs to see what's going on
-        #xxx=500
-        #yyy=500
-        #print('Initially: lin img: {}, val {}'.format(x[xxx,yyy],val[xxx,yyy]))
-        
         if self.params['nonlin']['robberto']:            
             x = image * val
         else:
-            #y1 = np.copy(image)
             x[i1] = (image[i1]+image[i1]/val[i1]) / 2. #I added the i1 used here...
 
 
-            #print('y1: {}, x: {}'.format(y1[xxx,yyy],x[xxx,yyy]))
-            
-            #print('Huge signal values are coming from the solution not converging')
-            #print('We need to adjust the initial guess, like Kevin suggested')
             while i < self.params['nonlin']['maxiter']:
                 i=i+1
-                #print('i is {}. x[500,500] is {}'.format(i,x[500,500]))
-                #if i == self.params['nonlin']['maxiter']:
-                    #print('max iterations reached, but {} pix have not met accuracy goal.'.format(len(inds[0])))
-                    #print(inds)
-                    #tmp=image[i1]
-                    #print(tmp[inds])
-                    #tmp2=lin_satmap[i1]
-                    #print(tmp2[inds])
-                    #tmp3=sat[i1]
-                    #print(tmp3[inds])
-                    #tmp4=dev[i1]
-                    #print(tmp4[inds])
-                    #sys.exit()
                 val = self.nonLinFunc(x,coeffs,sat)
                 val[i2]=1.
-                #print('i is {}, val: {}'.format(i,val[xxx,yyy]))
-                #y1 = x * val
-                #print('y1: {}'.format(y1[xxx,yyy]))
-                #dev[i1] = abs(image[i1]/y1[i1]-1.)
                 dev[i1] = abs(image[i1]/val[i1]-1.)
                 inds = np.where(dev[i1] > self.params['nonlin']['accuracy'])
-                #print('i={}. Number of pixels not below accuracy limit {}'.format(i,inds[0].size))
                 if inds[0].size < 1:
                     break
                 val1 = self.nonLinDeriv(x,coeffs,sat)
                 val1[i2] = 1.
-                #x[i1] = x[i1] + (image[i1]-y1[i1])/val1[i1]
                 x[i1] = x[i1] + (image[i1]-val[i1])/val1[i1]
-                #print('dev {}, val1: {}, x: {}'.format(dev[xxx,yyy],val1[xxx,yyy],x[xxx,yyy]))
-
 
                 #if we max out the number of iterations, save the array of accuracy values
                 #Spot checks reveal the pix that don't meet the accuracy reqs are randomly
                 #located on the detector, and don't seem to be correlated with point source
                 #locations.
-                if i == self.params['nonlin']['maxiter']:
+                if i == self.params['nonlin']['maxiter'] and self.params['Output']['save_intermediates']:
                     ofile = self.params['Output']['file'][0:-5] + '_doNonLin_accuracy.fits'
                     devcheck = np.copy(dev)
                     devcheck[i2] = -1.
                     h0 = fits.PrimaryHDU()
                     h1 = fits.ImageHDU(devcheck)
                     hl = fits.HDUList([h0,h1])
-                    hl.writeto(ofile,clobber=True)
+                    hl.writeto(ofile,overwrite=True)
                 
-            #test output accuracy
-            #testout = self.nonLinFunc(x,coeffs,sat)
-            #diff = image-testout
-            #print(np.nanmean(diff[i1]),np.nanmax(diff[i1]),np.nanmin(diff[i1]),np.nanmean(diff[i1]/image[i1]))
-            #print('pixel {},{}, added non-lin signal: {}'.format(xx,yy,x[yy,xx]))
-
-
-            #Check for pixels with nonsense values that come from Newton's method not converging.
-            #Set these pixels equal to zero.
-            #bad = ((x < -100) | (x > 1e5))
-            #numbad = np.sum(bad)
-            #print("In doNonLin {} pixels failed to converge, and will be set to zero.".format(numbad))
-            #x[bad] = 0.
-
             return x
 
+        
     def removeNonLin(self,data,coeffs):
 
         #CURRENTLY NOT USED
@@ -1946,7 +2363,6 @@ class RampSim():
         return outdata
 
 
-#CHECK THIS FUNCTION AND THE DERIV FUNCTION BELOW. DO I NEED TO EDIT TO MATCH JWST NLIN REFERENCE FILE FORMAT? SEE COMMENT ABOVE
     def orignonLinFunc(self,image,coeffs):
         values = np.copy(image)
         values[values > self.params['nonlin']['limit']] = self.params['nonlin']['limit'] #- adjust this for nonlin max map
@@ -2027,8 +2443,11 @@ class RampSim():
                 try:
                     newimage[i,j]=np.random.poisson(signalimage[i,j])
                 except:
-                    print("Error: bad signal value at pixel (x,y)=({},{}) = {}".format(j,i,signalimage[i,j]))
-                    sys.exit()
+                    try:
+                        newimage[i,j]=np.random.poisson(np.absolute(signalimage[i,j]))
+                    except:
+                        print("Error: bad signal value at pixel (x,y)=({},{}) = {}".format(j,i,signalimage[i,j]))
+                        sys.exit()
 
                 if self.params['simSignals']['photonyield'] and pym1 > 0.000001 and newimage[i,j] > 0:
                     if self.params['simSignals']['pymethod']:
@@ -2048,8 +2467,6 @@ class RampSim():
     def doCosmicRays(self,image,ngroup,iframe,nframe,ncr):
         #add cosmic rays to a frame
         nray = int(ncr)
-        #if nray > 10000:
-        #    self.cosmicraylist.write("# Warning: number of cosmic rays = %d, more than the size of the library.\n" % nray)
 
         i=0
         dims=image.shape
@@ -2071,29 +2488,8 @@ class RampSim():
 
             image[i1:i2,j1:j2]=image[i1:i2,j1:j2]+crimage[k1:k2,l1:l2]
 
-            #if nframe > 1:
-            #    self.cosmicraylist.write("%4d %4d %4d %1d %3s %1d %4d %15.1f\n" % (k+1,j+1,ngroup,iframe,'   ',n,m+1,np.max(crimage)))
-            #else:
-            #    self.cosmicraylist.write("%4d %4d %4d %5s     %1d %4d %15.1f\n" % (k+1,j+1,ngroup,'     ',n,m+1,np.max(crimage)))
-
             self.cosmicraylist.write("{} {} {} {} {} {} {}\n".format((j2-j1)/2+j1,(i2-i1)/2+i1,ngroup,iframe,n,m,np.max(crimage[k1:k2,l1:l2])))
         return image
-
-
-    #def dumpDicts(self):
-    #    print("self.runPars:")
-    #    for key in self.runPars.keys():
-    #        print("  %s = %s" % (key,self.runPars[key]))
-    #    print("self.fileList:")
-    #    for key in self.fileList.keys():
-    #        print("  %s = %s" % (key,self.fileList[key]))
-    #    print("self.flags:")
-    #    for key in self.flags.keys():
-    #        print("  %s = %s" % (key,self.flags[key]))
-    #    print("\nInput parameters:")
-    #    for i in range(len(self.parameters)):
-    #        print("%3d %s" % (i,self.parameters[i]))
-
 
 
     def getBaseDark(self):
@@ -2279,10 +2675,6 @@ class RampSim():
         if self.params['Output']['grism_source_image'] or self.params['Inst']['mode'] == 'tso':
             signalimage = np.zeros((np.int(yd*self.coord_adjust['y']),np.int(xd*self.coord_adjust['x'])),dtype=np.float)
         
-        #original version
-        #if self.params['Output']['grism_source_image'] == True:
-        #    signalimage = np.zeros((np.int(yd*self.grism_direct_factor),np.int(xd*self.grism_direct_factor)),dtype=np.float)
-
         arrayshape = signalimage.shape
 
         #MASK IMAGE
@@ -2314,7 +2706,7 @@ class RampSim():
         #Adjust point source locations using astrometric distortion
         #Translate magnitudes to counts in a single frame
         if self.runStep['pointsource'] == True:
-            pslist = self.getPointSourceList()
+            pslist = self.getPointSourceList(self.params['simSignals']['pointsource'])
 
             #translate the point source list into an image
             psfimage = self.makePointSourceImage(pslist)
@@ -2327,13 +2719,12 @@ class RampSim():
                 
             #Add the point source image to the overall image
             signalimage = signalimage + psfimage
-            #print('after point sources',np.max(signalimage),np.min(signalimage))
 
         #Simulated galaxies
         #Read in the list of galaxy positions/magnitudes to simulate
         #and create a countrate image of those galaxies.
         if self.runStep['galaxies'] == True:
-            galaxyCRImage = self.makeGalaxyImage(centerpsf)
+            galaxyCRImage = self.makeGalaxyImage(self.params['simSignals']['galaxyListFile'],centerpsf)
 
             #save the galaxy image for examination by the user
             if self.params['Output']['save_intermediates'] == True:
@@ -2344,29 +2735,22 @@ class RampSim():
             #add the galaxy image to the signalimage
             signalimage = signalimage + galaxyCRImage
 
-        #EXTENDED SOURCES
-        #print("Currently, getImage assumes that inputs are oriented north up and rotates by the rotation angle")
-        #print("in the parameter file. would be nice to make this smarter. Look for rotation angle within the")
-        #print("input image?")
-
         #read in extended signal image and add the image to the overall image
         if self.runStep['extendedsource'] == True:
-            print("Reading in extended image from {} and adding to the simulated data rate image.".format(self.params['simSignals']['extended']))
+            #print("Reading in extended image from {} and adding to the simulated data rate image.".format(self.params['simSignals']['extended']))
 
-            #Assume that the extendedCenter coordinates in the parameter
-            #file are in the coordinate system of the standard output
-            #signal rate image, NOT the extended range grism source image
-            self.params['simSignals']['extendedCenter'] += np.array([self.coord_adjust['xoffset'],self.coord_adjust['yoffset']],dtype=np.int)
+            #ext_src, extpixflag = self.readPointSourceFile(self.params['simSignals']['extended'])
+            extlist,extstamps = self.getExtendedSourceList(self.params['simSignals']['extended'])
 
-            extendedimage,extendedheader = self.getImage(self.params['simSignals']['extended'],arrayshape,True,self.params['Telescope']['rotation'],self.params['simSignals']['extendedCenter'])
+            #translate the extended source list into an image
+            extimage = self.makeExtendedSourceImage(extlist,extstamps)
 
-
-            #convolve the extended image with the PSF if requested
-            if self.params['simSignals']['PSFConvolveExtended'] == True:
-                extendedimage = s1.fftconvolve(extendedimage,centerpsf,mode='same')
+            #if requested, convolve the stamp images with the NIRCam PSF
+            if self.params['simSignals']['PSFConvolveExtended']:
+                extimage = s1.fftconvolve(extimage,centerpsf,mode='same')
 
             #add the extended image to the synthetic signal rate image
-            signalimage = signalimage + extendedimage*self.params['simSignals']['extendedscale']
+            signalimage = signalimage + extimage#*self.params['simSignals']['extendedscale']
 
 
         #ZODIACAL LIGHT
@@ -2392,116 +2776,16 @@ class RampSim():
             self.saveSingleFits(signalimage,sourcesImageName)
             print("Image of added sources from the 'sky' saved as {}".format(sourcesImageName))
 
-        #ILLUMINATION FLAT
-        if self.runStep['illuminationflat']:
-            illuminationflat,illuminationflatheader = self.readCalFile(self.params['Reffiles']['illumflat'])
-            signalimage = signalimage * illuminationflat
-
-        #PIXEL FLAT
-        if self.runStep['pixelflat']:
-            pixelflat,pixelflatheader = self.readCalFile(self.params['Reffiles']['pixelflat'])
-            signalimage = signalimage * pixelflat
-
-        #IPC EFFECTS
-        if self.runStep['ipc']:
-            ipcimage,ipcimageheader = self.readCalFile(self.params['Reffiles']['ipc'])
-                
-            #Assume that the IPC kernel is designed for the removal of IPC, which means we need to
-            #invert it.
-            if self.params['Reffiles']['invertIPC']:
-                print("Iverting IPC kernel prior to convolving with image")
-                yk,xk = ipcimage.shape
-                newkernel = 0. - ipcimage
-                newkernel[(yk-1)/2,(xk-1)/2] = 1. - (ipcimage[1,1]-np.sum(ipcimage))
-                ipcimage = newkernel
-                print(ipcimage)
-
-            signalimage = s1.fftconvolve(signalimage,ipcimage,mode="same")
-
-        #CROSSTALK
-        if self.runStep['crosstalk']:
-            if self.params['Readout']['namp'] == 4:
-                #Only sources on the detector will create crosstalk. If signalimage is larger than full frame
-                #because we are creating a grism image, then extract the pixels corresponding to the actual
-                #detector, and only create crosstalk values for those.
-                sigshape = signalimage.shape
-                xtinput = signalimage
-                xs = 0
-                xe = sigshape[1]
-                ys = 0
-                ye = sigshape[0]
-                if self.params['Output']['grism_source_image']:
-                    xs,xe,ys,ye = self.extractFromGrismImage(signalimage)  
-                    xtinput = signalimage[ys:ye,xs:xe]
-                  
-                xtcoeffs = self.readCrossTalkFile(self.params['Reffiles']['crosstalk'],self.detector[3:5].upper())
-                xtimage = self.crossTalkImage(xtinput,xtcoeffs)
-                
-                #Now add the crosstalk image to the signalimage
-                signalimage[ys:ye,xs:xe] += xtimage
-
-            else:
-                print("Crosstalk calculation requested, but the chosen subarray is read out using only 1 amplifier.")
-                print("Therefore there will be no crosstalk. Skipping this step.")
-
-        #OCCULTING SPOT - don't rotate the input image
-        if self.runStep['occult']:
-            occultimage,occultheader = self.getImage(self.params['Reffiles']['occult'],arrayshape,False,0.0)
-            signalimage = signalimage * occultimage
-
-
-        #If the desired output is a countrate image to be used to create a model dispersed image, 
-        #then signalimage here is what you want. It contains all of the modeled input signals, along
-        #with the effects of the flat fields and IPC. So, output this signalrate image to a fits file.
-        if self.params['Output']['grism_source_image'] == True:
-            grismDirectName = self.params['Output']['file'][0:-5] + '_GrismDirectImage_elec_per_sec.fits'
-            xcent_fov = arrayshape[1] / 2
-            ycent_fov = arrarshape[1] / 2
-            kw = {}
-            kw['xcenter'] = xcent_fov
-            kw['ycenter'] = ycent_fov
-            self.saveSingleFits(signalimage,grismDirectName,key_dict=kw)
-            print("Image to be used as input to make dispersed grism image saved as {}".format(grismDirectName))
-
-            if not self.params['Output']['grism_input_only']:
-                #Now, continue on and create the full ramp. First, cut down the extra pixels associated with the 
-                #input for the grism modeling, and push on with the nominal-sized output array
-                xs,xe,ys,ye = self.extractFromGrismImage(signalimage) 
-                signalimage = signalimage[ys:ye,xs:xe]
-                print('Signalimage cropped back down to nominal shape ({})'.format(signalimage.shape))
-            else:
-                print("grism_input_only set to True in {}. Quitting.".format(self.paramfile))
-                sys.exit()
-
-        #Apply the mask image to make sure the refrence pixels haven't had any signal added
-        signalimage = signalimage * maskimage
-
-
-        #if self.params['Output']['save_intermediates'] == True:
-        #    sourcesImageName = self.params['Output']['file'][0:-5] + '_TEMPmaskedSigRateImg.fits'
-        #    self.saveSingleFits(signalimage,sourcesImageName)
-        #    print("Image of added sources from the 'sky' saved as {}".format(sourcesImageName))
-
-        #Apply the pixel area map to introduce distortion
-        if self.runStep['pixelAreaMap']:
-            pixAreaMap = self.simpleGetImage(self.params['Reffiles']['pixelAreaMap'])
-            print("NEED TO FIGURE OUT IF WE ARE MULT OR DIVIDING THE PAM!!!")
-            print("Refpix are set to 0 in the PAM, so if we divide, we need to deal with that.")
-            signalimage = signalimage * pixAreaMap
 
         #Save the final rate image of added signals
         if self.params['Output']['save_intermediates'] == True:
-            rateImageName = self.params['Output']['file'][0:-5] + '_AddedSourcesPlusDetectorEffectsRateImage_elec_per_sec.fits'
+            #rateImageName = self.params['Output']['file'][0:-5] + '_AddedSourcesPlusDetectorEffectsRateImage_elec_per_sec.fits'
+            rateImageName = self.params['Output']['file'][0:-5] + '_AddedSources_elec_per_sec.fits'
             self.saveSingleFits(signalimage,rateImageName)
             print("Signal rate image of all added sources (plus flats and IPC applied if requested) saved as {}".format(rateImageName))
 
-        #Multiply the signal rate image by the calculated frame time in order to get an 
-        #image of the signal for a single frame
-        signalimage = signalimage * self.frametime
-
-        #print('after all simulated signals, times frametime',np.max(signalimage),np.min(signalimage))
-
         return signalimage
+
 
     def extractFromGrismImage(self,array):
         #return the indexes that will allow you to extract the nominal output
@@ -2566,7 +2850,19 @@ class RampSim():
         return image
             
         
-            
+    def basicGetImage(self,name):
+        #Read in a fits image
+        try:
+            image,header = fits.getdata(name,header=True)
+        except:
+            print('WARNING: unable to read in {}'.format(name))
+            sys.exit()
+        return image,header
+
+    def basicRotateImage(self,image,angle):
+        #rotate an array
+        return self.rotate(image,0.-angle)
+          
     def getImage(self,name,arrayshape,rotateflag,angle,place=[0,0]):
         #Read in a countrate image, rotate/crop, and return
         #Assume that the center of the image will align with
@@ -2598,20 +2894,10 @@ class RampSim():
         # if it is larger than the nominal full frame image size (which would be required 
         # if it is to be rotated properly and still fill the field of view
         imageshape = image.shape
-        #nominalarrayshape = np.array([self.subarray_bounds[3]-self.subarray_bounds[1]+1,self.subarray_bounds[2]-self.subarray_bounds[0]+1])
-
-        #print('before cropping:',arrayshape,imageshape)
 
         #Crop the input image to match the output array shape
-        #place = [placex,placey]
-        #for i in xrange(2):
         if imageshape != arrayshape:
-            #image = self.cropImageDimension(name,image,arrayshape,i,place[i])
             image = self.cropImage(name,image,arrayshape,place)
-            #print('after cropping in {} dimension, {},{}'.format(i,image.shape,arrayshape))
-
-        #print(image.shape,arrayshape)
-        #sys.exit()
 
         return image,header
 
@@ -2647,56 +2933,21 @@ class RampSim():
         #array to be returned
         outarr = np.zeros(arrayshape)
 
-        #array indexes that correspond to the edges
-        #of the image
-        #minarrx = minimagex_inarr
-        #if minimagex_inarr < 0:
-        #    minarrx = 0 
-
-        #maxarrx = maximagex_inarr
-        #if maximagex_inarr > arrayshape[1]:
-        #    maxarrx = arrayshape[1]
-
         minarrx = np.max([minimagex_inarr,0])
         maxarrx = np.min([maximagex_inarr,arrayshape[1]])
             
-        #minarry = minimagey_inarr
-        #if minimagey_inarr < 0:
-        #    minarry = 0 
-
-        #maxarry = maximagey_inarr
-        #if maximagey_inarr > arrayshape[0]:
-        #    maxarry = arrayshape[0]
-
         minarry = np.max([minimagey_inarr,0])
         maxarry = np.min([maximagey_inarr,arrayshape[0]])
    
-        #image indexes that correspond to the section to be added
-        #minimx = 0
-        #if minarrx_inim > 0:
-        #    minimx = minarrx_inim
-
         minimx = np.max([0,minarrx_inim])
         maximx = np.min([imageshape[1],maxarrx_inim])
    
-        #maximx = imageshape[1]
-        #if maxarrx_inim < imageshape[1]:
-        #    maximx = maxarrx_inim
-
         minimy = np.max([0,minarry_inim])
         maximy = np.min([imageshape[0],maxarry_inim])
         
-        #minimy = 0
-        #if minarry_inim > 0:
-        #    minimy = minarry_inim
-
-        #maximy = imageshape[0]
-        #if maxarry_inim < imageshape[0]:
-        #    maximy = maxarry_inim
-
-        print('CHECKING CROPIMAGE RESULTS:')
-        print(imageshape,arrayshape)
-        print(minarry,maxarry,minarrx,maxarrx,minimy,maximy,minimx,maximx)
+        #print('CHECKING CROPIMAGE RESULTS:')
+        #print(imageshape,arrayshape)
+        #print(minarry,maxarry,minarrx,maxarrx,minimy,maximy,minimx,maximx)
         outarr[minarry:maxarry,minarrx:maxarrx] = image[minimy:maximy,minimx:maximx]
         return outarr
 
@@ -2809,29 +3060,18 @@ class RampSim():
             image = image[ymin:ymax,:]
         else:
             image = image[:,ymin:ymax]
-        #print('after cropping',image.shape)
-
-        #hh = fits.PrimaryHDU(image)
-        #hl = fits.HDUList([hh])
-        #hl.writeto('testing_cropped.fits',clobber=True)
 
         #in the case where the image fell off the edge of the detector, place the image in a blank array so 
         #that the result is the same size as the output array
         if ((yminarray != 0) | (ymaxarray != arrayshape[axis])):
             if axis == 0:
                 fullimage = np.zeros((arrayshape[0],image.shape[1]))
-                #print(image.shape,yminarray,ymaxarray)
                 fullimage[yminarray:ymaxarray,:] = image
             else:
                 fullimage = np.zeros((image.shape[0],arrayshape[1]))
                 fullimage[:,yminarray:ymaxarray] = image
 
             image = fullimage
-
-        hh = fits.PrimaryHDU(image)
-        hl = fits.HDUList([hh])
-        hl.writeto('testing.fits',clobber=True)
-
 
         return image
                            
@@ -2843,13 +3083,6 @@ class RampSim():
         newimage[np.where(newimage < 0.)]=np.min(image)
         return newimage
 
-
-    #def saveSingleFits(self,image,name):
-    #    #save an array into the first extension of a fits file
-    #    h0 = fits.PrimaryHDU()
-    #    h1 = fits.ImageHDU(image)
-    #    hdulist = fits.HDUList([h0,h1])
-    #    hdulist.writeto(name,clobber=True)
 
     def saveSingleFits(self,image,name,key_dict=None):
         #save an array into the first extension of a fits file
@@ -2864,7 +3097,7 @@ class RampSim():
                 h1.header[key] = key_dict[key]
 
         hdulist = fits.HDUList([h0,h1])
-        hdulist.writeto(name,clobber=True)
+        hdulist.writeto(name,overwrite=True)
 
 
     def dist(self,pos1,pos2):
@@ -2886,66 +3119,6 @@ class RampSim():
                 arcdist=arcdist+180.
             return arcdist,ang
 
-
-#    def orig_skytopixel(self,xreal,yreal):
-#        if len(self.xpow) < 6:
-#            return xreal,yreal
-#        else:
-#            a1=0.
-#            a2=0.
-#            for k in range(len(self.xpow)):
-#                t1=xreal**self.xpow[k]
-#                t2=yreal**self.ypow[k]
-#                a1=a1+self.xtrans2[k]*t1*t2
-#                a2=a2+self.ytrans2[k]*t1*t2
-#            return a1,a2
-#
-#    def scitoideal(self,xreal,yreal,xref,yref,degree,coeffs):
-#        #originally pixeltosky(?????)
-#        #translate an input pixel coordinate from distorted
-#        #to undistorted coordinates - see the first two 
-#        #equations in JWST-STScI-001550
-#        counter = 1
-#        xideal = 0
-#        yideal = 0
-#        for i in xrange(1,degree+1):
-#            for j in xrange(i+1):
-#                xideal = xideal + coeffs[0,counter] * (xreal-xref)**(i-j) * (yreal-yref)**j
-#                yideal = yideal + coeffs[1,counter] * (xreal-xref)**(i-j) * (yreal-yref)**j
-#                counter += 1
-#        return xideal,yideal
-#
-#
-#    def idealtosci(self,x1,y1,xref,yref,degree,coeffs):
-#        #ideal coord system is in units of arcsecs!!!
-#        #previously skytopixel(????)
-#        #translate an input pixel coordinate from undistorted
-#        #to distorted coordinates. See the second two equations
-#        #in JWST-STScI-001550
-#        deltax = 0.
-#        deltay = 0.
-#        counter = 1
-#        for i in xrange(1,degree+1):
-#            for j in xrange(i+1):
-#                deltax = deltax + coeffs[0,counter]*x1**(i-j)*y1**j
-#                #print(i,j,x1,(i-j),x1**(i-j),y1,j,y1**j,x1**(i-j)*y1**j)
-#                deltay = deltay + coeffs[1,counter]*x1**(i-j)*y1**j
-#                counter += 1
-#        return deltax + xref, deltay + yref
-#
-#
-#    def orig_pixeltosky(self,x1,y1):
-#        if len(self.xpow) < 3:
-#            return x1,y1
-#        else:
-#            a1=0.
-#            a2=0.
-#            for k in range(len(self.xpow)):
-#                t1=x1**self.xpow[k]
-#                t2=y1**self.ypow[k]
-#                a1=a1+self.xtrans1[k]*t1*t2
-#                a2=a2+self.ytrans1[k]*t1*t2
-#            return a1,a2
 
     def posang(self,pos1,pos2):
         #calculate the position angle between two points
@@ -2985,61 +3158,6 @@ class RampSim():
         alpha2=alpha2.replace(" ","0")
         delta2=delta2.replace(" ","0")
         return alpha2,delta2
-
-
-    def getDistortionCoeffs(self,inst,det):
-        #choose the appropriate distortion coefficients for the instrument/detector
-        apname = det + '_' + self.params['Readout']['array_name']
-
-        #match using instrument name and aperture name (which is detector + subarray name)
-        match = ((self.astrom_coeffs['InstrName'] == inst) & (self.astrom_coeffs['AperName'] == apname))
-        if sum(match) == 1:
-            #get the reference pixel position (units are in full frame coords)
-            #These are also indexed to 1, not zero. Be careful when using 
-            #with idealtosky where we need it indexed to 1, versus other python
-            #applications where it should be indexed to zero.
-            xdetref = self.astrom_coeffs['XSciRef'].data[match] 
-            ydetref = self.astrom_coeffs['YSciRef'].data[match] 
-            
-            #Extract the pixel scale in x and y
-            xscale = self.astrom_coeffs['XSciScale'].data[match].data[0]
-            yscale = self.astrom_coeffs['YSciScale'].data[match].data[0]
-
-            #polynomial degree of the polynomials to be used
-            deg = self.astrom_coeffs['Sci2IdlDeg'].data[match]
-
-            #lists to hold the coefficients
-            xidl2sci = []
-            yidl2sci = []
-            xsci2idl = []
-            ysci2idl = []
-            
-            for xpow in xrange(deg+1):
-                for ypow in xrange(xpow+1):
-                    xsci2idl.append(self.astrom_coeffs['Sci2IdlX'+str(xpow)+str(ypow)].data[match])
-                    ysci2idl.append(self.astrom_coeffs['Sci2IdlY'+str(xpow)+str(ypow)].data[match])
-                    xidl2sci.append(self.astrom_coeffs['Idl2SciX'+str(xpow)+str(ypow)].data[match])
-                    yidl2sci.append(self.astrom_coeffs['Idl2SciY'+str(xpow)+str(ypow)].data[match])
-
-            #extract the actual values from the masked array
-            xs2i = [l.data[0] for l in xsci2idl]
-            ys2i = [l.data[0] for l in ysci2idl]
-            xi2s = [l.data[0] for l in xidl2sci]
-            yi2s = [l.data[0] for l in yidl2sci]
-
-            #return one list for each direction. (sci -> ideal and ideal -> sci)
-            #Each list will be 2D and created from one list for X's and one for Y's
-            idl2sci = np.stack([np.array(xi2s),np.array(yi2s)],axis=0)
-            sci2idl = np.stack([np.array(xs2i),np.array(ys2i)],axis=0)
-
-            return deg[0],xdetref[0],ydetref[0],xscale,yscale,idl2sci,sci2idl
-
-        else:
-            if sum(match) == 0:
-                print('WARNING: distortion coefficients for {} not found in {}'.format(apname,self.params['Reffiles']['astrometric']))
-            if sum(match) > 1:
-                print('WARNING: more than one set of matching distortion coefficients for {} found in {}.'.format(apname,self.params['Reffiles']['astrometric']))
-            sys.exit()
             
 
     def readCrossTalkFile(self,file,detector):
@@ -3098,16 +3216,16 @@ class RampSim():
         #save the crosstalk correction image
         if self.params['Output']['save_intermediates'] == True:
             phdu = fits.PrimaryHDU(xtalk_corr_im)
-            phdu.writeto('xtalk_correction_image.fits',clobber=True)
+            phdu.writeto('xtalk_correction_image.fits',overwrite=True)
 
         return xtalk_corr_im
 
 
-    def getPointSourceList(self):
+    def getPointSourceList_original(self):
         #read in the list of point sources to add, and adjust the
         #provided positions for astrometric distortion
-        dummypos=' 00:00:00.00'
-        dummydeg=0.00
+        #dummypos=' 00:00:00.00'
+        #dummydeg=0.00
 
         #find the array sizes of the PSF files in the library. Assume they are all the same.
         #We want the distance from the PSF peak to the edge, assuming the peak is centered
@@ -3363,6 +3481,426 @@ class RampSim():
         return pointSourceList
 
 
+    def getExtendedSourceList(self,filename):
+        #read in the list of point sources to add, and adjust the
+        #provided positions for astrometric distortion
+
+        extSourceList = Table(names=('pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','magnitude','countrate_e/s','counts_per_frame_e'),dtype=('f','f','S14','S14','f','f','f','f','f'))
+
+        try:
+            lines,pixelflag = self.readPointSourceFile(filename)
+            if pixelflag:
+                print("Extended source list input positions assumed to be in units of pixels.")
+            else:
+                print("Extended list input positions assumed to be in units of RA and Dec.") 
+        except:
+            print("WARNING: Unable to open the extended source list file {}".format(filename))
+            sys.exit()
+
+        #File to save adjusted point source locations
+        eslist = open(self.params['Output']['file'][0:-5] + '_extendedsources.list','w')
+
+        dtor = math.radians(1.)
+        nx = (self.subarray_bounds[2]-self.subarray_bounds[0])+1
+        ny = (self.subarray_bounds[3]-self.subarray_bounds[1])+1
+        xc = (self.subarray_bounds[2]+self.subarray_bounds[0])/2.
+        yc = (self.subarray_bounds[3]+self.subarray_bounds[1])/2.
+
+        #Location of the subarray's reference pixel. 
+        xrefpix = self.refpix_pos['x']
+        yrefpix = self.refpix_pos['y']
+
+        # center positions, sub-array sizes in pixels
+        # now offset the field center to array center for astrometric distortion corrections
+        coord_transform = None
+        if self.runStep['astrometric']:
+
+            #Read in the CRDS-format distortion reference file
+            with AsdfFile.open(self.params['Reffiles']['astrometric']) as dist_file:
+                coord_transform = dist_file.tree['model']
+
+        #Using the requested RA,Dec of the reference pixel, along with the 
+        #V2,V3 of the reference pixel, and the requested roll angle of the telescope
+        #create a matrix that can be used to translate between V2,V3 and RA,Dec
+        #for any pixel.
+        #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
+        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+      
+        #Write out the RA and Dec of the field center to the output file
+        #Also write out column headers to prepare for source list
+        eslist.write("# Field center (degrees): %13.8f %14.8f y axis rotation angle (degrees): %f  image size: %4.4d %4.4d\n" % (self.ra,self.dec,self.params['Telescope']['rotation'],nx,ny))
+        eslist.write('#\n')
+        eslist.write("#    RA_(hh:mm:ss)   DEC_(dd:mm:ss)   RA_degrees      DEC_degrees     pixel_x   pixel_y    magnitude   counts/sec    counts/frame\n")
+
+        #Loop over input lines in the source list 
+        all_stamps = []
+        for values in lines:
+            #try:
+            #line below (if 1>0) used to keep the block of code below at correct indent for the try: above
+            #the try: is commented out for code testing.
+            if 1>0:
+                try:
+                    entry0 = float(values['x_or_RA'])
+                    entry1 = float(values['y_or_Dec'])
+                    print(entry0,entry1,pixelflag)
+                    if not pixelflag:
+                        ra_str,dec_str = self.makePos(entry0,entry1)
+                        #dec_str = self.makePos(entry0,entry1)
+                        ra = entry0
+                        dec = entry1
+                except:
+                    #if inputs can't be converted to floats, then 
+                    #assume we have RA/Dec strings. Convert to floats.
+                    ra_str = values['x_or_RA']
+                    dec_str = values['y_or_Dec']
+                    ra,dec = self.parseRADec(ra_str,dec_str)
+
+                #Case where point source list entries are given with RA and Dec
+                if not pixelflag:
+
+                    #If distortion is to be included - either with or without the full set of coordinate
+                    #translation coefficients
+                    if self.runStep['astrometric']:
+                        pixelx,pixely = self.RADecToXY_astrometric(ra,dec,attitude_matrix,coord_transform)
+                    else:
+                        #No distortion at all - "manual mode"
+                        pixelx,pixely = self.RADecToXY_manual(ra,dec)
+
+                else:
+                    #Case where the point source list entry locations are given in units of pixels
+                    #In this case we have the source position, and RA/Dec are calculated only so 
+                    #they can be written out into the output source list file.
+
+                    #Assume that the input x and y values are coordinate values
+                    #WITHIN THE SPECIFIED SUBARRAY. So for example, a source in the file
+                    #at 0,0 when you are making a SUB160 ramp will fall on the lower left
+                    #corner of the SUB160 subarray, NOT the lower left corner of the full
+                    #frame. 
+
+                    pixelx = entry0
+                    pixely = entry1
+
+                    ra,dec,ra_str,dec_str = self.XYToRADec(pixelx,pixely,attitude_matrix,coord_transform)
+                            
+
+                #Get the input magnitude of the point source
+                mag=float(values['magnitude'])
+
+                #Now find out how large the extended source image is, so we
+                #know if all, part, or none of it will fall in the field of view
+                ext_stamp = fits.getdata(values['filename'])
+
+                eshape = np.array(ext_stamp.shape)
+                if len(eshape) == 2:
+                    edgey,edgex = eshape / 2
+                else:
+                    print("WARNING, extended source image {} is not 2D! Not sure how to proceed. Quitting.".format(values['filename']))
+                    sys.exit()
+      
+
+                #Define the min and max source locations (in pixels) that fall onto the subarray
+                #Inlude the effects of a requested grism_direct image, and also keep sources that
+                #will only partially fall on the subarray
+                #pixel coords here can still be negative and kept if the grism image is being made
+              
+                #First, coord limits for just the subarray
+                miny = 0
+                maxy = self.subarray_bounds[3] - self.subarray_bounds[1] 
+                minx = 0
+                maxx = self.subarray_bounds[2] - self.subarray_bounds[0] 
+        
+                #Expand the limits if a grism direct image is being made
+                if self.params['Output']['grism_source_image'] == True:
+                    extrapixy = np.int((maxy+1)/2 * (self.coord_adjust['y'] - 1.))
+                    miny -= extrapixy
+                    maxy += extrapixy
+                    extrapixx = np.int((maxx+1)/2 * (self.coord_adjust['x'] - 1.))
+                    minx -= extrapixx
+                    maxx += extrapixx
+
+                #Now, expand the dimensions again to include point sources that fall only partially on the 
+                #subarray
+                miny -= edgey
+                maxy += edgey
+                minx -= edgex
+                maxx += edgex
+
+                #Keep only sources within the appropriate bounds
+                if pixely > miny and pixely < maxy and pixelx > minx and pixelx < maxx:
+                            
+                    #set up an entry for the output table
+                    entry = [pixelx,pixely,ra_str,dec_str,ra,dec,mag]
+
+                    #save the stamp image after normalizing to a total signal of 1.
+                    ext_stamp /= np.sum(ext_stamp)
+                    all_stamps.append(ext_stamp)
+
+                    #translate magnitudes to countrate
+                    scale = 10.**(0.4*(15.0-mag))
+
+                    #get the countrate that corresponds to a 15th magnitude star for this filter
+                    cval = self.countvalues[self.params['Readout']['filter']]
+
+                    #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
+                    if cval == 0:
+                        print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                        print("Eventually attempting to calculate value using pysynphot.")
+                        print("but pysynphot is not present in jwst build 6, so pushing off to later...")
+                        sys.exit()
+                        cval = self.findCountrate(self.params['Readout']['filter'])
+
+                    #translate to counts in single frame at requested array size
+                    framecounts = scale*cval*self.frametime
+                    countrate = scale*cval
+
+                    #add the countrate and the counts per frame to pointSourceList
+                    #since they will be used in future calculations
+                    #entry.append(scale)
+                    entry.append(countrate)
+                    entry.append(framecounts)
+
+                    #add the good point source, including location and counts, to the pointSourceList
+                    #self.pointSourceList.append(entry)
+                    extSourceList.add_row(entry)
+
+                    #write out positions, distances, and counts to the output file
+                    eslist.write("%s %s %14.8f %14.8f %9.3f %9.3f  %9.3f  %13.6e   %13.6e\n" % (ra_str,dec_str,ra,dec,pixelx,pixely,mag,countrate,framecounts))
+                #except:
+                #    print("ERROR: bad point source line %s. Skipping." % (line))
+        print("Number of extended sources found within the requested aperture: {}".format(len(extSourceList)))
+        #close the output file
+        eslist.close()
+        
+        #If no good point sources were found in the requested array, alert the user
+        if len(extSourceList) < 1:
+            print("Warning: no non-sidereal extended sources within the requested array.")
+            print("The extended source image option is being turned off")
+        
+        return extSourceList,all_stamps
+
+
+    def getPointSourceList(self,filename):
+        #read in the list of point sources to add, and adjust the
+        #provided positions for astrometric distortion
+
+        #find the array sizes of the PSF files in the library. Assume they are all the same.
+        #We want the distance from the PSF peak to the edge, assuming the peak is centered
+        if self.params['simSignals']['psfwfe'] != 0:
+            numstr = str(self.params['simSignals']['psfwfe'])
+        else:
+            numstr = 'zero'
+        psflibfiles = glob.glob(self.params['simSignals']['psfpath'] +'*')
+
+
+        #If a PSF library is specified, then just get the dimensions from one of the files
+        if self.params['simSignals']['psfpath'] != None:
+            h = fits.open(psflibfiles[0])
+            edgex = h[0].header['NAXIS1'] / 2 - 1
+            edgey = h[0].header['NAXIS2'] / 2 - 1
+            self.psfhalfwidth = np.array([edgex,edgey])
+            h.close()
+        else:
+            #if no PSF library is specified, then webbpsf will be creating the PSF on the 
+            #fly. In this case, we assume webbpsf's default output size of 301x301 pixels?
+            edgex = int(301 / 2)
+            edgey = int(301 / 2)
+            print("INFO: no PSF library specified, but point sources are to be added to")
+            print("the output. PSFs will be generated by WebbPSF on the fly")
+            print("Not yet implemented.")
+            sys.exit()
+
+
+        pointSourceList = Table(names=('pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','magnitude','countrate_e/s','counts_per_frame_e'),dtype=('f','f','S14','S14','f','f','f','f','f'))
+
+        try:
+            lines,pixelflag = self.readPointSourceFile(filename)
+            if pixelflag:
+                print("Point source list input positions assumed to be in units of pixels.")
+            else:
+                print("Point list input positions assumed to be in units of RA and Dec.") 
+        except:
+            print("WARNING: Unable to open the point source list file {}".format(filename))
+            sys.exit()
+
+        #File to save adjusted point source locations
+        pslist = open(self.params['Output']['file'][0:-5] + '_pointsources.list','w')
+
+        dtor = math.radians(1.)
+        nx = (self.subarray_bounds[2]-self.subarray_bounds[0])+1
+        ny = (self.subarray_bounds[3]-self.subarray_bounds[1])+1
+        xc = (self.subarray_bounds[2]+self.subarray_bounds[0])/2.
+        yc = (self.subarray_bounds[3]+self.subarray_bounds[1])/2.
+
+        #Location of the subarray's reference pixel. 
+        xrefpix = self.refpix_pos['x']
+        yrefpix = self.refpix_pos['y']
+
+        # center positions, sub-array sizes in pixels
+        # now offset the field center to array center for astrometric distortion corrections
+        coord_transform = None
+        if self.runStep['astrometric']:
+
+            #Read in the CRDS-format distortion reference file
+            with AsdfFile.open(self.params['Reffiles']['astrometric']) as dist_file:
+                coord_transform = dist_file.tree['model']
+
+        #Using the requested RA,Dec of the reference pixel, along with the 
+        #V2,V3 of the reference pixel, and the requested roll angle of the telescope
+        #create a matrix that can be used to translate between V2,V3 and RA,Dec
+        #for any pixel.
+        #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
+        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+      
+        #Define the min and max source locations (in pixels) that fall onto the subarray
+        #Inlude the effects of a requested grism_direct image, and also keep sources that
+        #will only partially fall on the subarray
+        #pixel coords here can still be negative and kept if the grism image is being made
+
+        #First, coord limits for just the subarray
+        miny = 0
+        maxy = self.subarray_bounds[3] - self.subarray_bounds[1] 
+        minx = 0
+        maxx = self.subarray_bounds[2] - self.subarray_bounds[0] 
+        #print('before adjusting for grism, min/max x {} {}, min/max y {} {}'.format(minx,maxx,miny,maxy))
+        
+        #Expand the limits if a grism direct image is being made
+        if self.params['Output']['grism_source_image'] == True:
+            extrapixy = np.int((maxy+1)/2 * (self.coord_adjust['y'] - 1.))
+            miny -= extrapixy
+            maxy += extrapixy
+            extrapixx = np.int((maxx+1)/2 * (self.coord_adjust['x'] - 1.))
+            minx -= extrapixx
+            maxx += extrapixx
+
+
+        #Now, expand the dimensions again to include point sources that fall only partially on the 
+        #subarray
+        miny -= edgey
+        maxy += edgey
+        minx -= edgex
+        maxx += edgex
+
+
+        #Write out the RA and Dec of the field center to the output file
+        #Also write out column headers to prepare for source list
+        pslist.write("# Field center (degrees): %13.8f %14.8f y axis rotation angle (degrees): %f  image size: %4.4d %4.4d\n" % (self.ra,self.dec,self.params['Telescope']['rotation'],nx,ny))
+        pslist.write('#\n')
+        pslist.write("#    RA_(hh:mm:ss)   DEC_(dd:mm:ss)   RA_degrees      DEC_degrees     pixel_x   pixel_y    magnitude   counts/sec    counts/frame\n")
+
+
+        #if the top line of the source list file contains '# position_pixel'
+        #the the script assumes the input values are x,y pixels
+        #If '# pixel' is not present, it assumes columns 1 and 2 are
+        #RA and Dec values
+        #if 'position_pixel' in lines[0]:
+        #    pixelflag=True
+        #    print("Point source list input positions assumed to be in units of pixels.")
+        #else:
+        #    print("Point list input positions assumed to be in units of RA and Dec.") 
+
+        #Loop over input lines in the source list 
+        for values in lines:
+            #try:
+            #line below (if 1>0) used to keep the block of code below at correct indent for the try: above
+            #the try: is commented out for code testing.
+            if 1>0:
+                try:
+                    entry0 = float(values['x_or_RA'])
+                    entry1 = float(values['y_or_Dec'])
+                    if not pixelflag:
+                        ra_str,dec_str = self.makePos(entry0,entry1)
+                        ra = entry0
+                        dec = entry1
+                except:
+                    #if inputs can't be converted to floats, then 
+                    #assume we have RA/Dec strings. Convert to floats.
+                    ra_str = values['x_or_RA']
+                    dec_str = values['y_or_Dec']
+                    ra,dec = self.parseRADec(ra_str,dec_str)
+
+                #Case where point source list entries are given with RA and Dec
+                if not pixelflag:
+
+                    #If distortion is to be included - either with or without the full set of coordinate
+                    #translation coefficients
+                    if self.runStep['astrometric']:
+                        pixelx,pixely = self.RADecToXY_astrometric(ra,dec,attitude_matrix,coord_transform)
+                    else:
+                        #No distortion at all - "manual mode"
+                        pixelx,pixely = self.RADecToXY_manual(ra,dec)
+
+                else:
+                    #Case where the point source list entry locations are given in units of pixels
+                    #In this case we have the source position, and RA/Dec are calculated only so 
+                    #they can be written out into the output source list file.
+
+                    #Assume that the input x and y values are coordinate values
+                    #WITHIN THE SPECIFIED SUBARRAY. So for example, a source in the file
+                    #at 0,0 when you are making a SUB160 ramp will fall on the lower left
+                    #corner of the SUB160 subarray, NOT the lower left corner of the full
+                    #frame. 
+
+                    pixelx = entry0
+                    pixely = entry1
+
+                    ra,dec,ra_str,dec_str = self.XYToRADec(pixelx,pixely,attitude_matrix,coord_transform)
+                            
+
+                #Get the input magnitude of the point source
+                mag=float(values['magnitude'])
+
+                if pixely > miny and pixely < maxy and pixelx > minx and pixelx < maxx:
+                            
+                    #set up an entry for the output table
+                    entry = [pixelx,pixely,ra_str,dec_str,ra,dec,mag]
+
+                    #translate magnitudes to countrate
+                    scale = 10.**(0.4*(15.0-mag))
+
+                    #get the countrate that corresponds to a 15th magnitude star for this filter
+                    cval = self.countvalues[self.params['Readout']['filter']]
+
+                    #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
+                    if cval == 0:
+                        print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                        print("Eventually attempting to calculate value using pysynphot.")
+                        print("but pysynphot is not present in jwst build 6, so pushing off to later...")
+                        sys.exit()
+                        cval = self.findCountrate(self.params['Readout']['filter'])
+
+                    #translate to counts in single frame at requested array size
+                    framecounts = scale*cval*self.frametime
+                    countrate = scale*cval
+
+                    #add the countrate and the counts per frame to pointSourceList
+                    #since they will be used in future calculations
+                    entry.append(countrate)
+                    entry.append(framecounts)
+
+                    #add the good point source, including location and counts, to the pointSourceList
+                    pointSourceList.add_row(entry)
+
+                    #write out positions, distances, and counts to the output file
+                    pslist.write("%s %s %14.8f %14.8f %9.3f %9.3f  %9.3f  %13.6e   %13.6e\n" % (ra_str,dec_str,ra,dec,pixelx,pixely,mag,countrate,framecounts))
+
+        print("Number of point sources found within the requested aperture: {}".format(len(pointSourceList)))
+        #close the output file
+        pslist.close()
+        
+        #If no good point sources were found in the requested array, alert the user
+        if len(pointSourceList) < 1:
+            print("Warning: no point sources within the requested array.")
+            print("The point source image option is being turned off")
+            self.runStep['pointsource']=False
+            if self.runStep['extendedsource'] == False and self.runStep['cosmicray'] == False:
+                print("Error: no input point sources, extended image, nor cosmic rays specified")
+                print("Exiting...")
+                sys.exit()
+        
+        return pointSourceList
+
+
+
     def makePointSourceImage(self,pointSources):
         dims = np.array(self.dark.data[0,0,:,:].shape)
 
@@ -3372,26 +3910,6 @@ class RampSim():
         #direct image
         deltax = 0
         deltay = 0
-        #psfimage = np.zeros_like(self.dark.data[0,0,:,:])
-
-        #If a grism or TSO source image is requested, then we make the image
-        #larger by the appropraite factor, and the coordinates
-        #of the sources need to be adjusted accordingly.
-        #xfactor = 1
-        #yfactor = 1
-        #if self.params['Output']['grism_source_image'] == True:
-        #    xfactor = self.grism_direct_factor
-        #    yfactor = self.grism_direct_factor
-        #elif self.params['Inst']['mode'] == 'tso':
-        #    xfactor = self.tso_factor['x']
-        #    yfactor = self.tso_factor['y']
-
-        #newdims = np.array(dims * self.grism_direct_factor,dtype=np.int)
-        #deltax = np.int((newdims[1] - dims[1]) / 2)
-        #deltay = np.int((newdims[0] - dims[0]) / 2)
-        ##dims = newdims
-
-        #print('previously deltax,deltay,newdims {} {} {}'.format(deltax,deltay,newdims))
 
         newdimsx = np.int(dims[1] * self.coord_adjust['x'])
         newdimsy = np.int(dims[0] * self.coord_adjust['y'])
@@ -3399,20 +3917,8 @@ class RampSim():
         deltay = self.coord_adjust['yoffset']
         dims = np.array([newdimsy,newdimsx])
 
-        #print('new deltax,deltay,newdims {} {} {}'.format(deltax,deltay,dims))
-        #print('deltax,deltay',deltax,deltay)
-
         #create the empty image
         psfimage = np.zeros((dims[0],dims[1]))
-        #dims=psfimage.shape
-
-        #if the mode is spectroscopic, then return zeros
-        #if self.params['Inst']['mode'] not in pointSourceModes:
-        #    return psfimage
-
-
-        #pointSourceList = Table(names=('pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','Ang_dist_arcsec','Position_angle_deg','magnitude','countrate_e/s','counts_per_frame_e'))
-
 
         #Loop over the entries in the point source list
         for entry in pointSources:
@@ -3431,8 +3937,6 @@ class RampSim():
 
             #Now we need to determine the proper PSF file to read in from the library
             #This depends on the sub-pixel offsets above
-            #a=0.1*int(10.*xfract+0.5)-0.5 - original lines, assuming one file per 0.1 pix interval
-            #b=0.1*int(10.*yfract+0.5)-0.5
             interval = self.params['simSignals']['psfpixfrac']
             numperpix = int(1./interval)
             a = interval * int(numperpix*xfract + 0.5) - 0.5
@@ -3508,16 +4012,27 @@ class RampSim():
                 print('bad high')
                 #sys.exit()
 
-            #print(psfimage.shape,'imx',j1,j2,'imy',i1,i2,webbpsfimage.shape,'psfx',l1,l2,'psfy',k1,k2)
-            #print(yoff,ny,nyshift)
-            psfimage[j1:j2,i1:i2] = psfimage[j1:j2,i1:i2] + webbpsfimage[l1:l2,k1:k2]*counts
+            if entry['RA_degrees'] > 0.50969 and entry['RA_degrees'] < 0.509692:
+                print(xpos,ypos)
 
-            #print(np.max(webbpsfimage[l1:l2,k1:k2]*counts),np.max(psfimage[j1:j2,i1:i2]))
-
+            try:
+                psfimage[j1:j2,i1:i2] = psfimage[j1:j2,i1:i2] + webbpsfimage[l1:l2,k1:k2]*counts
+            except:
+                #In here we catch sources that are off the edge
+                #of the detector. These may not necessarily be caught in
+                #getpointsourcelist because if the PSF is not centered
+                #in the webbpsf stamp, then the area to be pulled from
+                #the stamp may shift off of the detector.
+                #print(psffn,dims,psfdims,xoff,yoff,nx,ny,nxshift,nyshift)
+                #print(j1,j2,i1,i2,l1,l2,k1,k2)
+                #print(entry)
+                #sys.exit()
+                pass
+                
         return psfimage
 
 
-    def makeGalaxyImage(self,psf):
+    def makeGalaxyImage_original(self,psf):
         #Using the entries in the 'simSignals' 'galaxyList' file, create a countrate image
         #of model galaxies (sersic profile)
 
@@ -3550,16 +4065,12 @@ class RampSim():
         xfact = 1
         yfact = 1
         if self.params['Output']['grism_source_image']:
-            #xfact = self.grism_direct_factor
-            #yfact = self.grism_direct_factor
-            #elif 
             yd = np.int(origyd * self.coord_adjust['y'])
             xd = np.int(origxd * self.coord_adjust['x'])
 
         #create the final galaxy countrate image
         galimage = np.zeros((yd,xd))
         dims = galimage.shape
-        #print('DIMENSIONS OF GALAXY OUTPUT: {}'.format(dims))
 
         #Adjust the coordinate system of the galaxy list if working with a grism direct image output
         deltax = 0
@@ -3619,21 +4130,115 @@ class RampSim():
                 print('bad high')
                 #sys.exit()
 
-            #if j1 == 2949:
-            #print(j1,j2,i1,i2,l1,l2,k1,k2)
-            #print(entry)
-            #print(galimage.shape)
-            #print(stamp.shape)
-            #print(ny,nyshift,dims)
-            #print(entry['pixely'],deltay)
-            #print(entry['RA'],entry['Dec'])
+            if ((j2 > j1) and (i2 > i1) and (l2 > l1) and (k2 > k1) and (j1 < dims[0]) and (i1 < dims[0])):
+                galimage[j1:j2,i1:i2] = galimage[j1:j2,i1:i2] + stamp[l1:l2,k1:k2]
+            else:
+                print("Source located entirely outside the field of view. Skipping.")
+
+        return galimage
+
+
+
+    def makeGalaxyImage(self,file,psf):
+        #Using the entries in the 'simSignals' 'galaxyList' file, create a countrate image
+        #of model galaxies (sersic profile)
+
+        #Read in the list of galaxies (positions and magnitides)
+        glist, pixflag, radflag = self.readGalaxyFile(file)
+        if pixflag:
+            print("Galaxy list input positions assumed to be in units of pixels.")
+        else:
+            print("Galaxy list input positions assumed to be in units of RA and Dec.") 
+
+        if radflag:
+            print("Galaxy list input radii assumed to be in units of pixels.")
+        else:
+            print("Galaxy list input radii assumed to be in units of RA and Dec.") 
+
+
+        #Extract and save only the entries which will land (fully or partially) on the
+        #aperture of the output
+        galaxylist = self.filterGalaxyList(glist,pixflag,radflag)
+
+        #galaxylist is a table with columns:
+        #'pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','radius','ellipticity','pos_angle','sersic_index','magnitude','countrate_e/s','counts_per_frame_e'
+
+        #final output image
+        origyd,origxd = self.dark.data[0,0,:,:].shape
+        yd = origyd
+        xd = origxd
+        
+        #expand if a grism source image is being made
+        xfact = 1
+        yfact = 1
+        if self.params['Output']['grism_source_image']:
+            #xfact = self.grism_direct_factor
+            #yfact = self.grism_direct_factor
+            #elif 
+            yd = np.int(origyd * self.coord_adjust['y'])
+            xd = np.int(origxd * self.coord_adjust['x'])
+
+        #create the final galaxy countrate image
+        galimage = np.zeros((yd,xd))
+        dims = galimage.shape
+
+        #Adjust the coordinate system of the galaxy list if working with a grism direct image output
+        deltax = 0
+        deltay = 0
+        if self.params['Output']['grism_source_image']:
+            deltax = np.int((dims[1] - origxd) / 2)
+            deltay = np.int((dims[0] - origyd) / 2)
+
+        #For each entry, create an image, and place it onto the final output image
+        for entry in galaxylist:
             
-            #print(psfimage.shape,'imx',j1,j2,'imy',i1,i2,webbpsfimage.shape,'psfx',l1,l2,'psfy',k1,k2)
-            #print(yoff,ny,nyshift)
-            #if entry['pixelx'] > 2289.31 and entry['pixelx'] < 2289.32 and entry['pixely'] < -310.26 and entry['pixely'] > -310.27:
-            #    print('input indexes, orig {},{}, adj for grism {} {}'.format(entry['pixelx'],entry['pixely'],entry['pixelx']+deltax,entry['pixely']+deltay))
-            #    print('full indexes {},{} and {},{}.'.format(j1,j2,i1,i2))
-            #    print('stamp indexes {},{}, and {},{}.'.format(l1,l2,k1,k2))
+            #first create the galaxy image
+            stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],entry['pos_angle'],entry['counts_per_frame_e'])
+
+            #convolve the galaxy with the NIRCam PSF
+            stamp = s1.fftconvolve(stamp,psf,mode='same')
+            
+            #Now add the stamp to the main image
+            #Extract the appropriate subarray from the galaxy image if necessary
+            galdims = stamp.shape
+
+            print('requested radius: {}  stamp size: {}'.format(entry['radius'],galdims))
+
+            nyshift = galdims[0] / 2
+            nxshift = galdims[1] / 2
+
+            nx = int(entry['pixelx']+deltax)
+            ny = int(entry['pixely']+deltay)
+            i1 = max(nx-nxshift,0)
+            i2 = min(nx+1+nxshift,dims[1])
+            j1 = max(ny-nyshift,0)
+            j2 = min(ny+1+nyshift,dims[0])
+            k1 = nxshift-(nx-i1)
+            k2 = nxshift+(i2-nx)
+            l1 = nyshift-(ny-j1)
+            l2 = nyshift+(j2-ny)
+
+            #if the cutout for the psf is larger than
+            #the psf array, truncate it, along with the array
+            #in the source image where it will be placed
+            if l2 > galdims[0]:
+                l2 = galdims[0]
+                j2 = j1 + (l2-l1)
+
+            if k2 > galdims[1]:
+                k2 = galdims[1]
+                i2 = i1 + (k2-k1)
+
+            #At this point coordinates are in the final output array coordinate system, so there
+            #should be no negative values, nor values larger than the output array size
+            if j1 < 0 or i1<0 or l1<0 or k1<0:
+                print(j1,i1,l1,k1)
+                print('bad low')
+                #sys.exit()
+            if j2>(dims[0]+1) or i2>(dims[1]+1) or l2>(galdims[1]+1) or k2>(galdims[1]+1):
+                print(j2,i2,l2,k2)
+                print('bad high')
+                #sys.exit()
 
             if ((j2 > j1) and (i2 > i1) and (l2 > l1) and (k2 > k1) and (j1 < dims[0]) and (i1 < dims[0])):
                 galimage[j1:j2,i1:i2] = galimage[j1:j2,i1:i2] + stamp[l1:l2,k1:k2]
@@ -3641,6 +4246,80 @@ class RampSim():
                 print("Source located entirely outside the field of view. Skipping.")
 
         return galimage
+
+
+    def makeExtendedSourceImage(self,extSources,extStamps):
+        dims = np.array(self.dark.data[0,0,:,:].shape)
+
+        #offset that needs to be applied to the x,y positions of the
+        #source list to account for case where we make a point
+        #source image that is extra-large, to be used as a grism 
+        #direct image
+        deltax = 0
+        deltay = 0
+
+        newdimsx = np.int(dims[1] * self.coord_adjust['x'])
+        newdimsy = np.int(dims[0] * self.coord_adjust['y'])
+        deltax = self.coord_adjust['xoffset']
+        deltay = self.coord_adjust['yoffset']
+        dims = np.array([newdimsy,newdimsx])
+
+        #create the empty image
+        extimage = np.zeros((dims[0],dims[1]))
+
+        #Loop over the entries in the point source list
+        for entry,stamp in izip(extSources,extStamps):
+            #adjust x,y position if the grism output image is requested
+            xpos = entry['pixelx'] + deltax
+            ypos = entry['pixely'] + deltay
+            xoff = math.floor(xpos)
+            yoff = math.floor(ypos)
+
+            #desired counts per second in the point source
+            counts = entry['countrate_e/s'] #/ self.frametime
+
+            #Extract the appropriate subarray from the PSF image if necessary
+            #Assume that the brightest pixel corresponds to the peak of the psf
+            psfdims = stamp.shape
+            nyshift,nxshift = np.array(psfdims) / 2
+            nx = int(xoff)
+            ny = int(yoff)
+            i1 = max(nx-nxshift,0)
+            i2 = min(nx+1+nxshift,dims[1])
+            j1 = max(ny-nyshift,0)
+            j2 = min(ny+1+nyshift,dims[0])
+            k1 = nxshift-(nx-i1)
+            k2 = nxshift+(i2-nx)
+            l1 = nyshift-(ny-j1)
+            l2 = nyshift+(j2-ny)
+
+            #if the cutout for the psf is larger than
+            #the psf array, truncate it, along with the array
+            #in the source image where it will be placed
+            if l2 > psfdims[0]:
+                l2 = psfdims[0]
+                j2 = j1 + (l2-l1)
+
+            if k2 > psfdims[1]:
+                k2 = psfdims[1]
+                i2 = i1 + (k2-k1)
+
+            #At this point coordinates are in the final output array coordinate system, so there
+            #should be no negative values, nor values larger than the output array size
+            if j1 < 0 or i1<0 or l1<0 or k1<0:
+                print(j1,i1,l1,k1)
+                print('bad low')
+                sys.exit()
+            if j2>(dims[0]+1) or i2>(dims[1]+1) or l2>(psfdims[1]+1) or k2>(psfdims[1]+1):
+                print(j2,i2,l2,k2)
+                print('bad high')
+                sys.exit()
+
+            #Add stamp image to the extended source countrate image
+            extimage[j1:j2,i1:i2] = extimage[j1:j2,i1:i2] + stamp[l1:l2,k1:k2]*counts
+
+        return extimage
+
 
 
     def filterGalaxyList(self,galaxylist,pixelflag,radiusflag):
@@ -3677,12 +4356,6 @@ class RampSim():
             nx = np.int(nx * self.grism_direct_factor)
             ny = np.int(ny * self.grism_direct_factor)
 
-        print('updated for grism, min/max x {} {}, min/max y {} {}'.format(minx,maxx,miny,maxy))
-        #print('final update, to account for partially overlapping sources, will be done for each source individually.')
-
-        #print(galaxylist)
-
-            
         #Create transform matrix for galaxy sources
         #Read in the CRDS-format distortion reference file
         coord_transform = None
@@ -3759,11 +4432,6 @@ class RampSim():
 
                 ra,dec,ra_str,dec_str = self.XYToRADec(pixelx,pixely,attitude_matrix,coord_transform)
 
-
-            #print(ra_str,dec_str)
-            #print(outminy,outmaxy,outminx,outmaxx)
-            #print(pixelx,pixely)
-            #sys.exit()
             #only keep the source if the peak will fall within the subarray
             if pixely > outminy and pixely < outmaxy and pixelx > outminx and pixelx < outmaxx:
 
@@ -4027,15 +4695,6 @@ class RampSim():
             sys.exit()
         
 
-        #to make things easier to read, break up the yaml dictionary into 
-        #a separate dictionary for each group
-
-        #DOES IT MAKE SENSE TO DO THIS?
-        #self.inst_params = self.params['Inst']
-        #self.read_params = self.params['Readout']
-        #self.reffiles = self.params['Reffiles']
-
-
     def instrument_specific_dicts(self,instrument):
         #get instrument-specific values for things that
         #don't need to be in the parameter file
@@ -4130,7 +4789,9 @@ class RampSim():
         self.runStep['galaxies'] = self.checkRunStep(self.params['simSignals']['galaxyListFile'])
         self.runStep['extendedsource'] = self.checkRunStep(self.params['simSignals']['extended'])
         self.runStep['movingTargets'] = self.checkRunStep(self.params['simSignals']['movingTargetList'])
+        self.runStep['movingTargetsSersic'] = self.checkRunStep(self.params['simSignals']['movingTargetSersic'])
         self.runStep['movingTargetsExtended'] = self.checkRunStep(self.params['simSignals']['movingTargetExtended'])
+        self.runStep['MT_tracking'] = self.checkRunStep(self.params['simSignals']['movingTargetToTrack'])
         self.runStep['zodiacal'] = self.checkRunStep(self.params['simSignals']['zodiacal'])
         self.runStep['scattered'] = self.checkRunStep(self.params['simSignals']['scattered'])
         self.runStep['linearity'] = self.checkRunStep(self.params['Reffiles']['linearity'])
@@ -4180,10 +4841,13 @@ class RampSim():
                 psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
                 self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['simSignals']['filter'].lower()+'/zero/'
             else:
-                if wfe in [123,136,155] and wfegroup > -1 and wfegroup < 10:
+                if wfe in [115,123,136,155] and wfegroup > -1 and wfegroup < 10:
                     psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
                     self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['Readout']['filter'].lower()+'/'+str(wfe)+'/'
-            self.psfname = self.params['simSignals']['psfpath'] + psfname
+                else:
+                    print("WARNING: wfe value of {} not allowed. Library does not exist.".format(wfe))
+                    sys.exit()
+                self.psfname = self.params['simSignals']['psfpath'] + psfname
 
         else:
             #case where psfPath is None. In this case, create a PSF on the fly to use
@@ -4285,7 +4949,7 @@ class RampSim():
             #ap_name = inst_abbrev[self.params['Inst']['instrument'].lower()] + self.params['Inst']['detector'].upper() + '_' + self.params['Readout']['array_name'].upper()
             ap_name = self.params['Readout']['array_name']
 
-            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
+            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref,self.parity,self.v3yang = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
             
             #Generate the coordinate transform for V2,V3 to 'ideal'
             self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
@@ -4394,7 +5058,11 @@ class RampSim():
         v2ref = row['V2Ref'].data[0]
         v3ref = row['V3Ref'].data[0]
 
-        return x_coeffs,y_coeffs,v2ref,v3ref
+        #Get parity and V3 Y angle info as well
+        parity = row['VIdlParity'].data[0]
+        yang = row['V3IdlYAngle'].data[0]
+        
+        return x_coeffs,y_coeffs,v2ref,v3ref,parity,yang
                 
 
     def getCRrate(self):
@@ -4441,7 +5109,6 @@ class RampSim():
         except:
             print("Error parsing RA,Dec strings: {} {}".format(rastr,decstr))
             sys.exit()
-            #return None,None
 
 
     def checkRunStep(self,filename):
@@ -4537,13 +5204,6 @@ class RampSim():
             print("WARNING: subarray name {} not found in the subarray dictionary {}.".format(self.params['Readout']['array_name'],self.params['Reffiles']['subarray_defs']))
             sys.exit()
 
-        #if ',' in self.params['Readout']['subarray_bounds']:
-        #    try:
-        #        self.subaray_bounds = [int(s) for s in self.params['Readout']['subarray_bounds'].split(',')]
-        #        if (len(self.subarray_bounds) != 4):
-        #            print("WARNING: incorrect number of values in subarray_bounds. Expecting 4 values separated by commas.")
-        #            sys.exit()
-        
 
     def calcFrameTime(self):
         #calculate the exposure time of a single frame of the proposed output ramp
@@ -4582,7 +5242,7 @@ class RampSim():
         with open(pfile,'w') as f:
             f.write('Inst:\n')
             f.write('  instrument: NIRCam          #Instrument name\n')
-            f.write('  mode: imaging                #Observation mode (e.g. imaging, WFSS, TSO)\n')
+            f.write('  mode: imaging                #Observation mode (e.g. imaging, WFSS, moving_target)\n')
             f.write('  nresetlines: 512                        #eventially use dictionary w/in code to look this up\n')
             f.write('\n')
             f.write('Readout:\n')
@@ -4643,8 +5303,11 @@ class RampSim():
             f.write('  extendedCenter: 1024,1024                   #x,y pixel location at which to place the extended image if it is smaller than the output array size\n')
             f.write('  PSFConvolveExtended: True #Convolve the extended image with the PSF before adding to the output image (True or False)\n')
             f.write('  movingTargetList: None                   #Name of file containing a list of point source moving targets (e.g. KBOs, asteroids) to add.\n')
+            f.write('  movingTargetSersic: None   #ascii file containing a list of 2D sersic profiles to have moving through the field')
             f.write('  movingTargetExtended: None               #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)\n')
             f.write('  movingTargetConvolveExtended: True       #convolve the extended moving targets with PSF before adding.\n')
+            f.write('  movingTargetToTrack: moving_target_to_track.list #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to "moving_target" ')  
+
             f.write('  zodiacal:  None                          #Zodiacal light count rate image file \n')
             f.write('  zodiscale:  1.0                            #Zodi scaling factor\n')
             f.write('  scattered:  None                          #Scattered light count rate image file\n')
@@ -4880,7 +5543,7 @@ class RampSim():
             f.write("or in decimal degrees.")
             f.write("# All lines beginning with '#' will be ignored when read in\n")
             f.write('#\n')
-            f.write('#xPos    yPos    Vegamag\n')
+            f.write('#x_or_RA    y_or_Dec    magnitude\n')
             for xv,yv,mv in izip(x,y,mags):
                 f.write('{}  {}  {}\n'.format(xv,yv,mv))
         print("Example point source list saved to {}.".format(psource))
@@ -4901,15 +5564,97 @@ class RampSim():
             f.write('359.98222 -0.0054125 1.373 0.0912 101.293 3.07 19.79\n')
             f.write('359.99151 -0.0041562 1.837 0.6898 236.011 3.35 19.02\n')
             f.write('359.99609 -0.0053726 0.428 0.4734 353.997 2.24 25.53\n')
-        print("Example galaxy source list saved to {}.".format(psource))
+        print("Example galaxy source list saved to {}.".format(galaxyfile))
         
 
+        #non-sidereal target to track
+        mttfile = 'example_nonsidereal_tracking_target.list'
+        with open(mttfile,'w') as f:
+            f.write('# ')
+            f.write('# ')
+            f.write('# x and y can be pixel values, or RA and Dec strings or floats. To differentiate, put "position_pixels" in the top line if the inputs are pixel values.')
+            f.write('# radius can also be in units of pixels or arcseconds. Put "radius_pixels" at top of file to specify radii in pixels.')
+            f.write('# position angle is given in degrees counterclockwise. A value of 0 will align the semimajor axis with the x axis of the detector.')
+            f.write('#An object value containing "point" will be interpreted as a point source. ')
+            f.write('#Anything containing "sersic" will create a 2D sersic profile.')
+            f.write('# Any other value will be interpreted as an extended source.')
+            f.write('#x_or_RA_velocity is the proper motion of the target in units of arcsec (or pixels) per year')
+            f.write('#Y_or_Dec_velocity is the proper motion of the target in units of arcsec (or pixels) per year')
+            f.write('#if the units are pixels per year, include "velocity pixels" in line 2 above.')
+            f.write('object x_or_RA y_or_Dec x_or_RA_velocity  y_or_Dec_velocity magnitude')
+            f.write('pointSource  359.9984688844023 -0.0016999909612954896  87660. 0.0 23.794845635303744')
+        print("Example non-sidereal target to track input list saved to {}.".format(mttfile))
+
+        #moving point sources (KBO's etc)
+        mfile = 'example_moving_point_sources.list'
+        with open(mfile,'w') as f:
+            f.write('#')
+            f.write('#')
+            f.write('#NOTE: KBOs move at about 0.5 - 4 "/hour!')
+            f.write('#')
+            f.write('#list of point sources to create as moving targets (KBOs, asteroids, etc)')
+            f.write('#position can be x,y or RA,Dec. If x,y, put the phrase "position_pixels" in the top')
+            f.write('#line of the file. Velocity can be in units of pix/hour or arcsec/hour.')
+            f.write('#If using pix/hour, place "velocity_pixels" in the second line of the file.')
+            f.write('#Note that if using velocities of pix/hour, the results will not be ')
+            f.write("#strictly correct because in reality distortion will cause object's")
+            f.write('#velocities to vary in pixels/hour. Velocities in arcsec/hour will be')
+            f.write('#constant.')
+            f.write('x_or_RA    y_or_Dec   magnitude  x_or_RA_velocity y_or_Dec_velocity')
+            f.write('12.0       12.0         19.0        -0.5               -0.02')
+            f.write('0.007      0.003        18.0        -0.5               -0.02')
+            f.write('359.998    0.010        19.5        0.05               -0.65')
+        print("Example moving target point (non-sidereal targets that aren't tracked) source list saved to {}.".format(mfile))
+
+        #moving (untracked) galaxies
+        mgfile = 'example_moving_galaxies.list'
+        with open(mgfile,'w') as f:
+            f.write('#')
+            f.write('# ')
+            f.write('#')
+            f.write('#Columns 1 and 2 can be either x,y positions on the detector aperture (e.g.')
+            f.write('#0,0 is lower left corner of the full frame of the subarray used for the ')
+            f.write('#output) or RA,Dec location of the center of the source. If they are x,y')
+            f.write('#positions, make the top line of the file "# position_pixels"')
+            f.write('#')
+            f.write('#radius is the half-light radius in pixels or arcseconds. If in pixels')
+            f.write('#make the second line of the file "# radius_pixels"')
+            f.write('#')
+            f.write('#pos_angle is the position angle of the semimajor axis, in degrees.')
+            f.write('#0 causes the semi-major axis to be horizontal.')
+            f.write('x_or_RA    y_or_Dec  radius  ellipticity  pos_angle  sersic_index  magnitude  x_or_RA_velocity y_or_Dec_velocity')
+            f.write('23:59:59.9986 +00:00:00.0047  1.0      0.25        20           2.0  16.000        -0.5               -0.02')
+            f.write('00:00:00.0003 +00:00:00.0216  1.5      0.5         79           1.2  16.000        -0.5               -0.02')
+            f.write('23:59:58.6185 +00:00:32.1260  1.5      0.25        0            2.0  18.000        -0.5               -0.02')
+            f.write('00:00:02.1327 +00:00:20.7322  1.5      0.25        70           2.0  17.000        -0.5               -0.02')
+        print("Example moving target galaxy (non-sidereal sersic targets that aren't tracked) list saved to {}.".format(mgfile))
+
+        #moving (untracked) extended sources
+        mefile = 'example_moving_extended.list'
+        with open(mefile,'w') as f:
+            f.write('#')
+            f.write('#')
+            f.write('#List of stamp image files to read in and use to create moving targets.')
+            f.write('#This is the method to use in order to create moving targets of ')
+            f.write('#extended sources, like planets, moons, etc.')
+            f.write('#position can be x,y or RA,Dec. If x,y, put "position_pixels" in the top')
+            f.write('#line of the file. Velocity can be in units of pix/sec or arcsec/sec.')
+            f.write('#If using pix/sec, place "velocity_pixels" in the second line of the file.')
+            f.write('#Note that if using velocities of pix/sec, the results will not be ')
+            f.write("#strictly correct because in reality distortion will cause object's")
+            f.write('#velocities to vary in pixels/sec. Velocities in arcsec/sec will be')
+            f.write('#constant.')
+            f.write('filename    x_or_RA    y_or_Dec   magnitude pos_angle  x_or_RA_velocity y_or_Dec_velocity')
+            f.write('ring_nebula.fits 0.007   0.003      12.0      0.0       -0.5               -0.02')
+        print("Example moving (non-sidereal sersic targets that aren't tracked) extended target list saved to {}.".format(mefile))
+        
+        
     def add_options(self,parser=None,usage=None):
         if parser is None:
             parser = argparse.ArgumentParser(usage=usage,description='Simulate JWST ramp')
         parser.add_argument("paramfile",help='File describing the input parameters and instrument settings to use. (YAML format).')
         parser.add_argument("--param_example",help='If used, an example parameter file is output.')
-        parser.add_argument("--input_examples",help="If used, output examples of subarray bounds file, readpattern file, point source list")
+        parser.add_argument("--input_examples",help="If used, output examples of subarray bounds file, readpattern file, point source lists, etc")
         return parser
 
 

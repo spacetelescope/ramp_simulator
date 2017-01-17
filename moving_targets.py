@@ -79,6 +79,7 @@ class MovingTarget():
         #print(xinit,xstamplen/2,xframes[-1])
         #print("intially, mnx is: {}".format(minx))
         maxx = np.int(np.max([np.floor(xframes[-1] + xstamplen/2.),np.floor(xframes[0]+xstamplen/2.)]))
+        #print('maxx is {}. xframes[0] and [-1] are {},{}, stamplen is {}'.format(maxx,xframes[0],xframes[-1],xstamplen))
         #miny = np.min([np.floor(yinit) - np.ceil(ystamplen/2.),np.floor(yframes[-1])-np.ceil(ystamplen/2.)])
         miny = np.int(np.min([np.floor(yframes[0]) - np.ceil(ystamplen/2.),np.floor(yframes[-1])-np.ceil(ystamplen/2.)]))
 
@@ -92,11 +93,11 @@ class MovingTarget():
         if minx < 0:
             mnx = 0
         if maxx > outx:
-            mxx = np.floor(outx-1)
+            mxx = np.int(outx-1)
         if miny < 0:
             mny = 0
         if maxy > outy:
-            mxy = np.floor(outy-1)
+            mxy = np.int(outy-1)
 
         #print("Now, minx is {}".format(mnx))
         #sys.exit()
@@ -106,11 +107,11 @@ class MovingTarget():
         totypoints = np.min([outy,mxy-mny+1])
         #print('totxpoints,outx,mxx,mnx',totxpoints,outx,mxx,mnx)
         #print('totypoints,outy,mxy,mny',totypoints,outy,mxy,mny)
-        print(totypoints,self.subsampy,totxpoints,self.subsampx,outx,mnx,mxx,mny,mxy)
-        print(minx,maxx,miny,maxy)
-        outputframe0 = np.zeros((totypoints*self.subsampy,totxpoints*self.subsampx))
+        #print(totypoints,self.subsampy,totxpoints,self.subsampx,outx,mnx,mxx,mny,mxy)
+        #print(minx,maxx,miny,maxy)
+        outputframe0 = np.zeros((np.int(totypoints*self.subsampy),np.int(totxpoints*self.subsampx)))
         #sys.exit()
-        outputframe1 = np.zeros((totypoints*self.subsampy,totxpoints*self.subsampx))
+        outputframe1 = np.zeros((np.int(totypoints*self.subsampy),np.int(totxpoints*self.subsampx)))
         outfull = np.zeros((numframes,outy,outx))
         outsubshape = outputframe0.shape
 
@@ -342,7 +343,7 @@ class MovingTarget():
 
 
         #print('after checks!!!',outxmin,outxmax,stampxmin,stampxmax)
-        return outxmin,outxmax,stampxmin,stampxmax
+        return np.int(outxmin),np.int(outxmax),np.int(stampxmin),np.int(stampxmax)
 
 
 
