@@ -60,9 +60,9 @@ except:
     stp_flag = False
    
 inst_list = ['nircam','niriss','nirspec','miri','fgs']
-modes = {'nircam':['imaging','moving_target'],'niriss':['imaging','wfss','soss']}
+modes = {'nircam':['imaging','moving_target','wfss','coron'],'niriss':['imaging','wfss','soss']}
 inst_abbrev = {'nircam':'NRC','nirspec':'NRS','miri':'MIRI','niriss':'NRS'}
-pointSourceModes = ['imaging']
+#pointSourceModes = ['imaging']
 pixelScale = {'nircam':{'sw':0.031,'lw':0.063}}
 full_array_size = {'nircam':2048}
 allowedOutputFormats = ['DMS']
@@ -215,7 +215,7 @@ class RampSim():
         #The output contains signal in ADU that accumulate
         #in one frametime.
         frameimage = None
-        if self.params['Inst']['mode'].lower() == 'imaging':
+        if self.params['Inst']['mode'].lower() != 'moving_target':
             print('Creating signal rate image of synthetic inputs.')
             frameimage = self.addedSignals()
 
@@ -317,7 +317,8 @@ class RampSim():
         #Combine the signal rate image and the moving target ramp. If signalramp is
         #a ramp, then rearrange into the requested readout pattern
         if mov_targs_integration is not None:
-            if self.params['Inst']['mode'].lower() == 'imaging':
+            #if self.params['Inst']['mode'].lower() == 'imaging':
+            if self.params['Inst']['mode'].lower() != 'moving_target':
                 signalramp = self.combineSimulatedDataSources('countrate',frameimage,None,mov_targs_integration)
             elif self.params['Inst']['mode'].lower() == 'moving_target':
                 signalramp = self.combineSimulatedDataSources('ramp',non_sidereal_ramp,non_sidereal_zero,mov_targs_integration)
@@ -332,7 +333,8 @@ class RampSim():
 
 
         else:
-            if self.params['Inst']['mode'].lower() == 'imaging':
+            #if self.params['Inst']['mode'].lower() in ['imaging','wfss']:
+            if self.params['Inst']['mode'].lower() != 'moving_target':    
                 num_frames = self.params['Readout']['ngroup'] * (self.params['Readout']['nframe'] + self.params['Readout']['nskip'])
                 yd,xd = frameimage.shape
                 signalramp = np.zeros((num_frames,yd,xd))
@@ -464,7 +466,7 @@ class RampSim():
                 print('Simulated signal data cropped back down to nominal shape ({}), and proceeding.'.format(signalramp.shape))
             else:
                 print("grism_input_only set to True in {}. Quitting.".format(self.paramfile))
-                sys.exit()
+                return 0
 
 
                 #above here, signalramp is always RAPID, and always the full ramp, even if there
@@ -701,7 +703,7 @@ class RampSim():
 
             #if requested, convolve the stamp images with the NIRCam PSF
             if self.params['simSignals']['PSFConvolveExtended']:
-                extCRImage = s1.fftconvolve(extimage,centerpsf,mode='same')
+                extCRImage = s1.fftconvolve(extCRImage,centerpsf,mode='same')
 
             totalCRList.append(extCRImage)
 
@@ -751,20 +753,31 @@ class RampSim():
 
     def createGrismDirectData(self,input):
         #Create the grism direct image or ramp to be saved 
-        #Save as a 3D cube regardless of the dimensions of the inputs
 
+        #Get the photflambda and photfnu values that go with
+        #the filter
+        module = fits.getval(self.params['Reffiles']['dark'],'module')
+        
+        zps = ascii.read(self.params['Reffiles']['flux_cal'])
+        mtch = ((zps['Filter'] == self.params['Readout']['filter']) & (zps['Module'] == module))
+        photflam = zps['PHOTFLAM'][mtch][0]
+        photfnu = zps['PHOTFNU'][mtch][0]
+        pivot = zps['Pivot_wave'][mtch][0]
+        
         arrayshape = input.shape
         if len(arrayshape) == 2:
             #make 3D for easier coding below
-            input = np.expand_dims(input,axis=0)
+            #input = np.expand_dims(input,axis=0)
             units = 'e-/sec'
-            indim = 2
+            #indim = 2
             yd,xd = arrayshape
+            tgroup = 0.
         elif len(arrayshape) == 3:
             units = 'e-'
-            indim = 3
+            #indim = 3
             g,yd,xd = arrayshape
-
+            tgroup = self.frametime*self.params['Readout']['nframe']
+            
         grismDirectName = self.params['Output']['file'][0:-5] + '_GrismDirectData.fits'
         xcent_fov = xd / 2
         ycent_fov = yd / 2
@@ -772,6 +785,11 @@ class RampSim():
         kw['xcenter'] = xcent_fov
         kw['ycenter'] = ycent_fov
         kw['units'] = units
+        kw['TGROUP'] = tgroup
+        kw['filter'] = self.params['Readout']['filter']
+        kw['photflam'] = photflam
+        kw['photfnu'] = photfnu
+        kw['pivotwav'] = pivot
         self.saveSingleFits(input,grismDirectName,key_dict=kw)
         print("Data to be used as input to make dispersed grism image(s) saved as {}".format(grismDirectName))
 
@@ -1225,7 +1243,7 @@ class RampSim():
         badlast = ((properramp[-1,:,:] < -100) | (properramp[-1,:,:] > 1e5))
         numbad = np.sum(badlast)
         yb,xb = properramp[-1,:,:].shape
-        print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*1./(xb*yb)))
+        print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*100./(xb*yb)))
         print("have bad signal values. These will be set to 0 or 65535 when the integration is saved.")
 
         nonconvmap = np.zeros_like(properramp)
@@ -1562,10 +1580,14 @@ class RampSim():
                 self.dark.zeroframe = zeroframe
 
         #EXPTYPE OPTIONS
-        #exptypes = ['NRC_IMAGE','NRC_GRISM','NRC_TACQ','NRC_CORON','NRC_DARK']
-        if self.params['Inst']['mode'].lower() != 'wfss':
-            self.dark.meta.exposure.type = 'NRC_IMAGE'
-        else:
+        #exptypes = ['NRC_IMAGE','NRC_GRISM','NRC_TACQ','NRC_CORON','NRC_DARK','NRC_TSIMAGE','NRC_TSGRISM']
+        #nrc_tacq and nrc_coron are not currently implemented.
+
+        exptype = {'imaging':'NRC_IMAGE','moving_target':'NRC_TSIMAGE','wfss':'NRC_GRISM','tso_wfss':'NRC_TSGRISM','coron':'NRC_CORON'}
+
+        try:
+            self.dark.meta.exposure.type = exptype[self.params['Inst']['mode'].lower()]
+        except:
             print('EXPTYPE mapping not complete for this!!! FIX ME!')
             sys.exit()
 
@@ -1621,6 +1643,8 @@ class RampSim():
         self.dark.meta.wcsinfo.v3_ref = self.v3_ref
         self.dark.meta.wcsinfo.vparity = self.parity
         self.dark.meta.wcsinfo.v3yangle = self.v3yang
+        self.dark.meta.wcsinfo.cdelt1 = self.xsciscale
+        self.dark.meta.wcsinfo.cdelt2 = self.ysciscale
         
         self.dark.meta.target.ra = self.ra
         self.dark.meta.target.dec = self.dec
@@ -1665,18 +1689,17 @@ class RampSim():
             mtch = fwpw['filter'] == self.params['Readout']['filter'].upper()
             fw = str(fwpw['filter_wheel'].data[mtch][0])
             pw = str(fwpw['pupil_wheel'].data[mtch][0])
-
-        #grism element
-        if self.params['Inst']['mode'].lower() != 'wfss':
-            grism='N/A'
+            #grism='N/A'
         else:
-            grism=fw
-
+            pw = self.params['Readout']['pupil']
+            fw = self.params['Readout']['filter']
+            #grism = pw
+            
         #since we are saving in DMS format, we can use the RampModel instance
         #that is self.dark, modify values, and save
         self.dark.meta.instrument.filter = fw
         self.dark.meta.instrument.pupil = pw
-        self.dark.meta.instrument.grating = grism
+        #self.dark.meta.instrument.grating = grism
 
         self.dark.meta.dither.primary_type = 'NONE'
         self.dark.meta.dither.position_number = 1
@@ -3216,7 +3239,8 @@ class RampSim():
         #save the crosstalk correction image
         if self.params['Output']['save_intermediates'] == True:
             phdu = fits.PrimaryHDU(xtalk_corr_im)
-            phdu.writeto('xtalk_correction_image.fits',overwrite=True)
+            xtalkout = self.params['Output']['file'][0:-5] + '_xtalk_correction_image.fits'
+            phdu.writeto(xtalkout,overwrite=True)
 
         return xtalk_corr_im
 
@@ -3584,11 +3608,16 @@ class RampSim():
                             
 
                 #Get the input magnitude of the point source
-                mag=float(values['magnitude'])
+                try:
+                    mag=float(values['magnitude'])
+                except:
+                    mag = None
 
                 #Now find out how large the extended source image is, so we
                 #know if all, part, or none of it will fall in the field of view
                 ext_stamp = fits.getdata(values['filename'])
+                if len(ext_stamp) != 2:
+                    ext_stamp = fits.getdata(values['filename'],1)
 
                 eshape = np.array(ext_stamp.shape)
                 if len(eshape) == 2:
@@ -3632,26 +3661,39 @@ class RampSim():
                     entry = [pixelx,pixely,ra_str,dec_str,ra,dec,mag]
 
                     #save the stamp image after normalizing to a total signal of 1.
-                    ext_stamp /= np.sum(ext_stamp)
+                    norm_factor = np.sum(ext_stamp)
+                    ext_stamp /= norm_factor
                     all_stamps.append(ext_stamp)
 
-                    #translate magnitudes to countrate
-                    scale = 10.**(0.4*(15.0-mag))
+                    #If a magnitude is given then adjust the countrate to match it
+                    if mag is not None:
+                        #translate magnitudes to countrate
+                        scale = 10.**(0.4*(15.0-mag))
 
-                    #get the countrate that corresponds to a 15th magnitude star for this filter
-                    cval = self.countvalues[self.params['Readout']['filter']]
+                        #get the countrate that corresponds to a 15th magnitude star for this filter
+                        cval = self.countvalues[self.params['Readout']['filter']]
 
-                    #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
-                    if cval == 0:
-                        print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
-                        print("Eventually attempting to calculate value using pysynphot.")
-                        print("but pysynphot is not present in jwst build 6, so pushing off to later...")
-                        sys.exit()
-                        cval = self.findCountrate(self.params['Readout']['filter'])
+                        #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
+                        if cval == 0:
+                            print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                            print("Eventually attempting to calculate value using pysynphot.")
+                            print("but pysynphot is not present in jwst build 6, so pushing off to later...")
+                            sys.exit()
+                            cval = self.findCountrate(self.params['Readout']['filter'])
 
-                    #translate to counts in single frame at requested array size
-                    framecounts = scale*cval*self.frametime
-                    countrate = scale*cval
+                        #translate to counts in single frame at requested array size
+                        framecounts = scale*cval*self.frametime
+                        countrate = scale*cval
+                        magwrite = mag
+
+                    else:
+                        #In this case, no magnitude is given in the extended input list
+                        #Assume the input stamp image is in units of e/sec then.
+                        print("No magnitude given for extended source in {}.".format(values['filename']))
+                        print("Assuming the original file is in units of counts per sec.")
+                        countrate = norm_factor
+                        framecounts = countrate*self.frametime
+                        magwrite = 99.99999
 
                     #add the countrate and the counts per frame to pointSourceList
                     #since they will be used in future calculations
@@ -3664,7 +3706,7 @@ class RampSim():
                     extSourceList.add_row(entry)
 
                     #write out positions, distances, and counts to the output file
-                    eslist.write("%s %s %14.8f %14.8f %9.3f %9.3f  %9.3f  %13.6e   %13.6e\n" % (ra_str,dec_str,ra,dec,pixelx,pixely,mag,countrate,framecounts))
+                    eslist.write("%s %s %14.8f %14.8f %9.3f %9.3f  %9.3f  %13.6e   %13.6e\n" % (ra_str,dec_str,ra,dec,pixelx,pixely,magwrite,countrate,framecounts))
                 #except:
                 #    print("ERROR: bad point source line %s. Skipping." % (line))
         print("Number of extended sources found within the requested aperture: {}".format(len(extSourceList)))
@@ -4471,7 +4513,8 @@ class RampSim():
 
         #Write the results to a file
         filteredList.meta['comments'] = ["Field center (degrees): %13.8f %14.8f y axis rotation angle (degrees): %f  image size: %4.4d %4.4d\n" % (self.ra,self.dec,self.params['Telescope']['rotation'],nx,ny)]
-        filteredList.write('galaxySources.list',format='ascii',overwrite=True)
+        filteredOut = self.params['Output']['file'][0:-5] + '_galaxySources.list'
+        filteredList.write(filteredOut,format='ascii',overwrite=True)
 
         print(filteredList)
 
@@ -4554,7 +4597,7 @@ class RampSim():
                 pass
 
         except:
-            print("WARNING: Unable to open the point source list file {}".format(filename))
+            print("WARNING: Unable to open the source list file {}".format(filename))
             sys.exit()
 
         return gtab,pflag
@@ -4870,9 +4913,10 @@ class RampSim():
         self.params['nonlin']['limit'] = self.checkParamVal(self.params['nonlin']['limit'],'nonlin max value',30000.,1.e6,66000.)
     
         #Combining the base dark ramp and the simulated signal ramp
-        comb_types = ['STANDARD','HIGHSIG','PROPER']
+        #comb_types = ['STANDARD','HIGHSIG','PROPER']
+        comb_types = ['PROPER']
         if self.params['newRamp']['combine_method'].upper() not in comb_types:
-            print("WARNING: unrecognized method for combining the dark and simulated signal: {}.".format(self.params['newRamp']['combine_method']))
+            print("WARNING: unrecognized or unsupported method for combining the dark and simulated signal: {}.".format(self.params['newRamp']['combine_method']))
             print("Acceptible values are {}".format(comb_types))
             sys.exit()
 
@@ -4949,7 +4993,7 @@ class RampSim():
             #ap_name = inst_abbrev[self.params['Inst']['instrument'].lower()] + self.params['Inst']['detector'].upper() + '_' + self.params['Readout']['array_name'].upper()
             ap_name = self.params['Readout']['array_name']
 
-            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref,self.parity,self.v3yang = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
+            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref,self.parity,self.v3yang,self.xsciscale,self.ysciscale = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
             
             #Generate the coordinate transform for V2,V3 to 'ideal'
             self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
@@ -5058,11 +5102,15 @@ class RampSim():
         v2ref = row['V2Ref'].data[0]
         v3ref = row['V3Ref'].data[0]
 
-        #Get parity and V3 Y angle info as well
+        #Get parity and V3 Y angle info 
         parity = row['VIdlParity'].data[0]
         yang = row['V3IdlYAngle'].data[0]
+
+        #Get pixel scale info - not used but needs to be in output
+        xsciscale = row['XSciScale'].data[0]
+        ysciscale = row['YSciScale'].data[0]
         
-        return x_coeffs,y_coeffs,v2ref,v3ref,parity,yang
+        return x_coeffs,y_coeffs,v2ref,v3ref,parity,yang,xsciscale,ysciscale
                 
 
     def getCRrate(self):
