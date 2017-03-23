@@ -160,9 +160,9 @@ class Simulator():
         dispYaml['Output']['grism_source_image'] = False
         dispYaml['Readout']['filter'] = self.pairedFilter
         if self.dispdir.lower() == 'column':
-            dispYaml['Inst']['pupil'] = 'GRISMC'
+            dispYaml['Readout']['pupil'] = 'GRISMC'
         else:
-            dispYaml['Inst']['pupil'] = 'GRISMR'
+            dispYaml['Readout']['pupil'] = 'GRISMR'
             
         #Create an extended target input file using the
         #output dispersed file
