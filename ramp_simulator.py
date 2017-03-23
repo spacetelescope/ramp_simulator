@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+ #! /usr/bin/env python
 
 '''
 Rewritten version of Kevin Volk's rampsim.py. Updated to be more general
@@ -109,6 +109,12 @@ class RampSim():
         #the proposed output integration
         self.dataVolumeCheck()
 
+        #compare the requested number of integrations to the number
+        #of integrations in the input dark
+        print("Dark shape as read in: {}".format(self.dark.data.shape))
+        self.darkints()
+        print("Dark shape after copying integrations to match request: {}".format(self.dark.data.shape))
+        
         #If the proper method of combining the dark and simulated signal
         #is to be used on any pixels, then get the linearized version of
         #the dark ramp here. If it is not specified by the user, then 
@@ -122,10 +128,11 @@ class RampSim():
                 #before superbias subtraction, refpix subtraction and linearizing
                 #Reorganize the dark according to the requested output readout pattern
                 self.dark,darkzeroframe = self.reorderDark(self.dark)
-                print('DARK has been reordered to match the input readpattern of {}'.format(self.dark.meta.exposure.readpatt))
+                print('DARK has been reordered to {} to match the input readpattern of {}'.format(self.dark.data.shape,self.dark.meta.exposure.readpatt))
                 #Linearize the dark ramp via the SSB pipeline. Also save a diff image of 
                 #the original dark minus the superbias and refpix subtracted dark, to use later.
                 self.linDark, self.sbAndRefpixEffects = self.linearizeDark(self.dark)
+                print("Linearized dark shape: {}".format(self.linDark.data.shape))
                 
                 #Now we need to linearize the zeroframe. Place it into a RampModel instance
                 #before running the pipeline steps
@@ -137,19 +144,20 @@ class RampSim():
                     zeroModel.err = filler
                     zeroModel.groupdq = filler
                     zeroModel.meta = self.dark.meta
+                    zeroModel.meta.exposure.nints = 1
                     zeroModel.meta.exposure.ngroups = 1
                     zeroModel.meta.exposure.nframes = 1
                     zeroModel.meta.exposure.groupgap = 0
                     zeroModel.meta.exposure.readpatt = 'RAPID'
                     zeroModel, zero_sbAndRefEffects = self.linearizeDark(zeroModel)
+                    print("zeroModel shape: {}".format(zeroModel.data.shape))
                     zero_sbAndRefEffects = zero_sbAndRefEffects[0,0,:,:]
                     #print('linearized the dark current zero frame. {}'.format(zeroModel.data.shape))
 
                     #now crop the zero frame to match the specified output size
                     zeroModel = self.cropDark(zeroModel)
                     zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
-                    #print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
-
+                    print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
             else:
                 zeroModel = self.readLinearDark()
                 self.sbAndRefpixEffects = None
@@ -160,6 +168,7 @@ class RampSim():
             self.linDark = self.cropDark(self.linDark)
             if zeroModel is not None:
                 zeroModel = self.cropDark(zeroModel)
+                print('cropped #2 the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
                 
             #save the linearized dark for testing
             if self.params['Output']['save_intermediates']:
@@ -185,7 +194,7 @@ class RampSim():
         #output ramp.
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
             if self.sbAndRefpixEffects is not None:
-                self.sbAndRefpixEffects = self.sbAndRefpixEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
+                self.sbAndRefpixEffects = self.sbAndRefpixEffects[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
 
         #calculate the exposure time of a single frame, based on the size of the subarray
         self.calcFrameTime()
@@ -224,6 +233,9 @@ class RampSim():
         #be treated as a moving target.
         if self.params['Inst']['mode'].lower() == 'moving_target':
 
+
+            print("need to adjust moving target work for multiple integrations! everything above has been modified")
+            
             #create the count rate image for the non-sidereal target(s)
             nonsidereal_countrate,ra_vel,dec_vel,vel_flag = self.nonsidereal_CRImage(self.params['simSignals']['movingTargetToTrack'])
 
@@ -352,8 +364,6 @@ class RampSim():
                 h1 = fits.ImageHDU(signalramp)
                 hl=fits.HDUList([h0,h1])
                 hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_tragets_ramp.fits',overwrite=True)
-
-
 
 
         #ILLUMINATION FLAT
@@ -537,13 +547,18 @@ class RampSim():
             bad2 = final_zero < 0
             final_zero[bad2] = 0
 
-        for grp in xrange(final_ramp.shape[0]):
-            frame = final_ramp[grp,:,:]
-            bad = frame > 65535
-            frame[bad] = 65535
-            bad2 = frame < 0
-            frame[bad2] = 0
-            final_ramp[grp,:,:] = frame
+        badhigh = final_ramp > 65535
+        badlow = final_ramp < 0
+        final_ramp[badhigh] = 65535
+        final_ramp[badlow] = 0
+            
+        #for grp in xrange(final_ramp.shape[0]):    
+        #    frame = final_ramp[grp,:,:]
+        #    bad = frame > 65535
+        #    frame[bad] = 65535
+        #    bad2 = frame < 0
+        #    frame[bad2] = 0
+        #    final_ramp[grp,:,:] = frame
 
         #save the integration
         if self.params['Output']['format'].upper() == 'DMS':
@@ -561,6 +576,52 @@ class RampSim():
             sys.exit()
 
 
+    def darkints(self):
+        #check the number of integrations in the dark current file and compare with the
+        #requested number of integrations. Add/remove integrations if necessary
+        ndarkints,ngroups,ny,nx = self.dark.data.shape
+        reqints = self.params['Readout']['nint']
+
+        if reqints <= ndarkints:
+            #Fewer requested integrations than are in the input dark.
+            print("{} output integrations requested.".format(reqints))
+            self.dark.data = self.dark.data[0:reqints,:,:,:]
+            self.dark.err = self.dark.err[0:reqints,:,:,:]
+            self.dark.groupdq = self.dark.groupdq[0:reqints,:,:,:]
+
+        elif reqints > ndarkints:
+            #More requested integrations than are in input dark.
+            print('Requested output has {} integrations, while input dark has only {}.'.format(reqints,ndarkints))
+            print('Adding integrations to input dark by making copies of the input.')
+            self.integration_copy(reqints,ndarkints)
+
+
+    def integration_copy(self,req,darkint):
+        #use copies of integrations in the dark current input to
+        #make up integrations in the case where the output has
+        #more integrations than the input
+        ncopies = np.int((req - darkint) / darkint)
+        extras = (req - darkint) % darkint
+
+        #full copies of the dark exposure (all integrations)
+        if ncopies > 0:
+            copydata = self.dark.data
+            copyerr = self.dark.err
+            copydq = self.dark.groupdq
+            for i in range(ncopies):
+                self.dark.data = np.vstack((self.dark.data,copydata))
+                self.dark.err = np.vstack((self.dark.err,copyerr))
+                self.dark.groupdq = np.vstack((self.dark.groupdq,copydq))
+                
+        #partial copy of dark (some integrations)
+        if extras > 0:
+            self.dark.data = np.vstack((self.dark.data,self.dark.data[0:extras,:,:,:]))
+            self.dark.err = np.vstack((self.dark.err,self.dark.err[0:extras,:,:,:]))
+            self.dark.groupdq = np.vstack((self.dark.groupdq,self.dark.groupdq[0:extras,:,:,:]))
+
+        self.dark.meta.exposure.nints = req
+            
+            
     def nonsidereal_CRImage(self,file):
         #create countrate image of non-sidereal sources that are being tracked.
 
@@ -1186,6 +1247,7 @@ class RampSim():
 
         #add synthetic ramp to the dark ramp
         print('Adding the synthetic signal ramp to the dark current ramp.')
+
         lin_outramp,lin_zeroframe = self.addSyntheticToDark(syn_linear_ramp,self.linDark,syn_zeroframe=None)
 
         #add the dark current zero frame to the synthetic signal zero frame
@@ -1204,6 +1266,21 @@ class RampSim():
         #If requested, insert non-linearity into the summed ramp
         if self.runStep['nonlin']:
             nonlin,nonlinheader = self.readCalFile(self.params['Reffiles']['linearity'])
+
+            #set NaN coefficients such that no correction will be made
+            nans = np.isnan(nonlin[1,:,:])
+            numnan = np.sum(nans)
+            print('The linearity coefficients of {} pixels are NaNs. Setting these coefficients such'.format(numnan))
+            print('that no linearity correction is made.')
+            for i,cof in enumerate(range(nonlin.shape[0])):
+                tmp = nonlin[cof,:,:]
+                if i == 1:
+                    tmp[nans] = 1.
+                else:
+                    tmp[nans] = 0.
+                nonlin[cof,:,:] = tmp
+
+                    
             #If the saturation map is given, don't settle for a single number for the nonlin limit. 
             #Read in saturation map, and translate into a linearity-corrected saturation map, and
             #use that as the nonlin limit. If the saturation map isn't provided, then fall back
@@ -1216,7 +1293,6 @@ class RampSim():
                 adj_satmap = self.nonLinFunc(self.satmap,nonlin,self.satmap)
             else:
                 adj_satmap = np.zeros_like(newimage) + self.params['nonlin']['limit']
-
 
             #Now insert the non-linearity into the ramp as well as the zeroframe if it exists
             properramp = self.doNonLin(lin_outramp,nonlin,adj_satmap)
@@ -1239,31 +1315,31 @@ class RampSim():
         #Look for pixels with crazy values. These are most likely due to the Newton's Method being
         #used to insert the non-linearity failing to converge, probably from bad linearity coefficients
         #or a bad initial guess. Set these pixels' signals to zero
-        bad = ((properramp < -100) | (properramp > 1e5))
-        badlast = ((properramp[-1,:,:] < -100) | (properramp[-1,:,:] > 1e5))
-        numbad = np.sum(badlast)
-        yb,xb = properramp[-1,:,:].shape
-        print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*100./(xb*yb)))
-        print("have bad signal values. These will be set to 0 or 65535 when the integration is saved.")
+        #bad = ((properramp < -100) | (properramp > 1e5))
+        #badlast = ((properramp[-1,:,:] < -100) | (properramp[-1,:,:] > 1e5))
+        #numbad = np.sum(badlast)
+        #yb,xb = properramp[-1,:,:].shape
+        #print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*100./(xb*yb)))
+        #print("have bad signal values. These will be set to 0 or 65535 when the integration is saved.")
 
-        nonconvmap = np.zeros_like(properramp)
-        nonconvmap[bad] = 1
-        if self.params['Output']['save_intermediates']:
-            h0 = fits.PrimaryHDU()
-            h1 = fits.ImageHDU(nonconvmap)
-            hl = fits.HDUList([h0,h1])
-            crazymap = self.params['Output']['file'][0:-5] + '_synPlusDark_lin_nonconverging_pix.fits'
-            hl.writeto(crazymap,overwrite=True)
-            print("A map of these pixels has been saved to {}".format(crazymap))
+        #nonconvmap = np.zeros_like(properramp)
+        #nonconvmap[bad] = 1
+        #if self.params['Output']['save_intermediates']:
+        #    h0 = fits.PrimaryHDU()
+        #    h1 = fits.ImageHDU(nonconvmap)
+        #    hl = fits.HDUList([h0,h1])
+        #    crazymap = self.params['Output']['file'][0:-5] + '_synPlusDark_lin_nonconverging_pix.fits'
+        #    hl.writeto(crazymap,overwrite=True)
+        #    print("A map of these pixels has been saved to {}".format(crazymap))
 
         #Now add the superbias and reference pixel effects back into the ramp to get it back
         #to a 'raw' state
         if refpix_effects is not None:
-            properramp += refpix_effects[0,:,:,:]
+            properramp += refpix_effects#[0,:,:,:]
             properzero += zeroRefEffects
 
         #Set the bad pixels to zero
-        properramp[bad] = 0.
+        #properramp[bad] = 0.
             
         #To simulate raw data, we need integers
         properramp = np.around(properramp)
@@ -1483,7 +1559,7 @@ class RampSim():
 
         #If the superbias file is provided, use it. If not, default to whatever is in CRDS
         if self.runStep['superbias']:
-            print('input data shape: {}'.format(linDark.data.shape))
+            print('superbias step input data shape: {}'.format(linDark.data.shape))
             linDark = SuperBiasStep.call(linDark,config_file=self.params['newRamp']['superbias_configfile'],override_superbias=self.params['Reffiles']['superbias'])
         else:
             linDark = SuperBiasStep.call(linDark,config_file=self.params['newRamp']['superbias_configfile'])
@@ -1517,8 +1593,8 @@ class RampSim():
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
             sbAndRefpixEffects = dark.data - linDark.data
 
-        #Linearity correction - save the output so that you won't need to re-run the pipeline when using the same
-        #dark current file in the future.
+        #Linearity correction - save the output so that you won't need to re-run the
+        #pipeline when using the same dark current file in the future.
         #Use the linearity coefficient file if provided
         linearoutfile = self.params['Output']['file'][0:-5] + '_linearized_dark_current_ramp.fits'
         if self.runStep['linearity']:
@@ -1535,6 +1611,9 @@ class RampSim():
         try:
             print('Reading in linearized dark current ramp from {}'.format(self.params['newRamp']['linearized_darkfile']))
             self.linDark = RampModel(self.params['newRamp']['linearized_darkfile'])
+
+            #remove the non-pipeline keywords.
+            self.linDark.__delattr__('extra_fits')
         except:
             print('WARNING: Unable to read in linearized dark ramp.')
             sys.exit()
@@ -1643,8 +1722,8 @@ class RampSim():
         self.dark.meta.wcsinfo.v3_ref = self.v3_ref
         self.dark.meta.wcsinfo.vparity = self.parity
         self.dark.meta.wcsinfo.v3yangle = self.v3yang
-        self.dark.meta.wcsinfo.cdelt1 = self.xsciscale
-        self.dark.meta.wcsinfo.cdelt2 = self.ysciscale
+        self.dark.meta.wcsinfo.cdelt1 = (0.-self.xsciscale) / 3600.
+        self.dark.meta.wcsinfo.cdelt2 = self.ysciscale / 3600.
         
         self.dark.meta.target.ra = self.ra
         self.dark.meta.target.dec = self.dec
@@ -1737,7 +1816,7 @@ class RampSim():
 
         self.dark.meta.exposure.nframes = self.params['Readout']['nframe']
         self.dark.meta.exposure.ngroups = self.params['Readout']['ngroup']
-        self.dark.meta.exposure.nints = 1
+        self.dark.meta.exposure.nints = self.params['Readout']['nint']
 
         self.dark.meta.exposure.sample_time = 10
         self.dark.meta.exposure.frame_time = self.frametime 
@@ -1774,71 +1853,91 @@ class RampSim():
             self.cosmicrays.append(im)
             self.cosmicraysheader.append(head)
 
+            
     def prepSynRamp(self,ramp):
         #input is noiseless ramp of simulated signals
-        #This ramp nominally comes from cases where moving targets
-        #are used (either satellites, KBOs moving relative to the 
-        #observation pointing, or non-sidereal tracking)
         #Add poisson noise and cosmic rays to this ramp, and translate
         #from electrons to ADU. 
 
-        #First, use a fake countrate image full of zeros and feed into
-        #frameToRamp, which will generate the cosmic rays, divide by the gain
-        #to put into ADU, and rearrange into the requested output read
-        #pattern
-        crs_only_ramp,crs_only_zero = self.frameToRamp(np.zeros_like(ramp[0,:,:]))
-        
-        #Now deal with the ramp containing the simulated signals. We need to add
-        #poisson noise to each frame, and divide by the gain
         frames,yd,xd = ramp.shape
-
+        
         #read in gain map to be used below
         if self.runStep['gain']:
             gainim,gainhead = self.readCalFile(self.params['Reffiles']['gain'])
             #set any NaN's to 1.0
             bad = ~np.isfinite(gainim)
             gainim[bad] = 1.0
-
+            
             #Pixels that have a gain value of 0 will be reset to have values of 1.0
             zs = gainim == 0
             gainim[zs] = 1.0
+
+
+        mod_ramp = copy(ramp)
+        for integ in range(self.params['Readout']['nint']):
+
+            print("Integration {}:".format(integ))
+            #First, use a fake countrate image full of zeros and feed into
+            #frameToRamp, which will generate the cosmic rays, divide by the gain
+            #to put into ADU, and rearrange into the requested output read
+            #pattern
+            crs_only_ramp,crs_only_zero = self.frameToRamp(np.zeros_like(ramp[0,:,:]))
+        
+            #Now deal with the ramp containing the simulated signals. We need to add
+            #poisson noise to each frame, and divide by the gain
+            #frames,yd,xd = ramp.shape
             
-        #Add poisson noise and change each frame to ADU from electrons
-        deltaimage = np.zeros((frames-1,yd,xd))
-        for frame in xrange(1,frames):
-            deltaimage[frame-1,:,:] = ramp[frame,:,:] - ramp[frame-1,:,:]
+            #Add poisson noise and change each frame to ADU from electrons
+            deltaimage = np.zeros((frames-1,yd,xd))
+            for frame in xrange(1,frames):
+                deltaimage[frame-1,:,:] = ramp[frame,:,:] - ramp[frame-1,:,:]
 
-        workimage = self.doPoisson(ramp[0,:,:])
-        if self.runStep['gain']:
-            workimage /= gainim
-        ramp[0,:,:] = workimage
+            workimage = self.doPoisson(ramp[0,:,:])
+            #if self.runStep['gain']:
+            #    workimage /= gainim
+            mod_ramp[0,:,:] = workimage
 
-        for frame in xrange(1,frames):
-            #add poisson noise 
-            poissonsignal = self.doPoisson(ramp[frame,:,:]) - ramp[frame,:,:]
-            ramp[frame,:,:] = ramp[frame-1,:,:] + deltaimage[frame-1,:,:] + poissonsignal
+            for frame in xrange(1,frames):
+                #add poisson noise 
+                poissonsignal = self.doPoisson(ramp[frame,:,:]) - ramp[frame,:,:]
+                #print('frame {}: input signal {}, dopoisson output {}, poisson signal {}'.format(frame,ramp[frame,200,200],poissonsignal[200,200]+ramp[frame,200,200],poissonsignal[200,200]))
+                mod_ramp[frame,:,:] = mod_ramp[frame-1,:,:] + deltaimage[frame-1,:,:] + poissonsignal
 
-        #apply the inverse gain to go from electrons to ADU
-        if self.runStep['gain']:
-            ramp /= gainim
+            #apply the inverse gain to go from electrons to ADU
+            if self.runStep['gain']:
+                mod_ramp /= gainim
 
-        #save the updated zero frame
-        zero = ramp[0,:,:] + crs_only_zero
+            #save the updated zero frame
+            if integ == 0:
+                zero = mod_ramp[0,:,:] + crs_only_zero
 
-        #rearrange ramp into the requested readout pattern, to match crs_only_ramp
-        if self.params['Readout']['readpatt'].upper() != 'RAPID':
-            ramp = self.changeReadPattern(ramp,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
+            #rearrange ramp into the requested readout pattern, to match crs_only_ramp
+            if self.params['Readout']['readpatt'].upper() != 'RAPID':
+                rearrangeramp = self.changeReadPattern(mod_ramp,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
+            else:
+                rearrangeramp = mod_ramp
+                
+            #add CRS
+            rearrangeramp += crs_only_ramp
 
-        #Combine the simulated signal ramp with the cosmic rays
-        ramp = ramp + crs_only_ramp
+            if integ == 0:
+                arrgroup,arry,arrx = rearrangeramp.shape
+                final_ramp = np.zeros((self.params['Readout']['nint'],arrgroup,arry,arrx))
 
-        return ramp,zero
+            final_ramp[integ,:,:,:] = rearrangeramp
+
+        #print(final_ramp[:,:,400,400])
+        #h0t=fits.PrimaryHDU(final_ramp)
+        #hllt=fits.HDUList([h0t])
+        #hllt.writeto('temp.fits',clobber=True)
+        #print('exiting to check ramp after poisson noise added')
+        #sys.exit()
+            
+        return final_ramp,zero
 
 
     
     def frameToRamp(self,sigimage):
-        #previously adjustSignals
-        
         #Once we have a frame that contains the signal added from external sources, 
         #we need to adjust these signals to account for detector effects (poisson
         #noise, gain, and we need to add cosmic rays if requested. 
@@ -2152,35 +2251,38 @@ class RampSim():
             frames = np.arange(self.params['Readout']['nskip'],deltaframe)
             accumimage = np.zeros_like(synthetic[0,:,:],dtype=np.int32)
 
-            #Loop over groups
-            for i in range(self.params['Readout']['ngroup']):
-                #average together the appropriate frames, skipe the appropriate frames
-                print('Averaging dark current ramp. Frames {}, to become group {}'.format(frames,i))
+            #Loop over integrations
+            for integ in range(self.params['Readout']['nint']):
+            
+                #Loop over groups
+                for i in range(self.params['Readout']['ngroup']):
+                    #average together the appropriate frames, skip the appropriate frames
+                    print('Averaging dark current ramp. Frames {}, to become group {}'.format(frames,i))
 
-                #If averaging needs to be done
-                if self.params['Readout']['nframe'] > 1:
-                    accumimage = np.mean(dark.data[0,frames,:,:],axis=0)
-                    errimage = np.mean(dark.err[0,frames,:,:],axis=0)
-                    gdqimage = dark.groupdq[0,frames[-1],:,:]
+                    #If averaging needs to be done
+                    if self.params['Readout']['nframe'] > 1:
+                        accumimage = np.mean(dark.data[0,frames,:,:],axis=0)
+                        errimage = np.mean(dark.err[0,frames,:,:],axis=0)
+                        gdqimage = dark.groupdq[0,frames[-1],:,:]
+                        
+                        #If no averaging needs to be done
+                    else:
+                        accumimage = dark.data[0,frames[0],:,:]
+                        errimage = dark.err[0,frames[0],:,:]
+                        gdqimage = dark.groupdq[0,frames[0],:,:]
 
-                    #If no averaging needs to be done
-                else:
-                    accumimage = dark.data[0,frames[0],:,:]
-                    errimage = dark.err[0,frames[0],:,:]
-                    gdqimage = dark.groupdq[0,frames[0],:,:]
-
-                #now add the averaged dark frame to the synthetic data, which has already been
-                #placed into the correct readout pattern
-                synthetic[i,:,:] += accumimage
+                    #now add the averaged dark frame to the synthetic data, which has already been
+                    #placed into the correct readout pattern
+                    synthetic[i,:,:] += accumimage
                 
-                #increment the frame indexes
-                frames = frames + deltaframe
+                    #increment the frame indexes
+                    frames = frames + deltaframe
 
         else:
             #if the input dark is not RAPID, or if the readout pattern of the input dark and
             #the output ramp match, then no averaging needs to be done and we can simply add
             #the synthetic groups to the dark current groups.
-            synthetic = synthetic + dark.data[0,0:self.params['Readout']['ngroup'],:,:]
+            synthetic = synthetic + dark.data[:,0:self.params['Readout']['ngroup'],:,:]
 
         return synthetic,zeroframe
 
@@ -2199,9 +2301,9 @@ class RampSim():
         dark_nskip = self.readpatterns['nskip'].data[mtch][0]
 
         nint,ngroup,yd,xd = dark.data.shape
-        outdark = np.zeros((self.params['Readout']['ngroup'],yd,xd))
-        outerr = np.zeros((self.params['Readout']['ngroup'],yd,xd))
-        outgdq = np.zeros((self.params['Readout']['ngroup'],yd,xd))
+        outdark = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
+        outerr = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
+        outgdq = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
   
         #We can only keep a zero frame around if the input dark
         #is RAPID. Otherwise that information is lost.
@@ -2220,41 +2322,41 @@ class RampSim():
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
             frames = np.arange(self.params['Readout']['nskip'],deltaframe)
-            accumimage = np.zeros_like(outdark[0,:,:],dtype=np.int32)
+            accumimage = np.zeros_like(outdark[0,0,:,:],dtype=np.int32)
 
-            #Loop over groups
-            for i in range(self.params['Readout']['ngroup']):
-                #average together the appropriate frames, skipe the appropriate frames
-                print('Averaging dark current ramp. Frames {}, to become group {}'.format(frames,i))
+            #Look over integrations
+            for integ in range(self.params['Readout']['nint']):
+                
+                #Loop over groups
+                for i in range(self.params['Readout']['ngroup']):
+                    #average together the appropriate frames, skip the appropriate frames
+                    print('Averaging dark current ramp. Frames {}, to become group {}'.format(frames,i))
 
-                #If averaging needs to be done
-                if self.params['Readout']['nframe'] > 1:
-                    accumimage = np.mean(dark.data[0,frames,:,:],axis=0)
-                    errimage = np.mean(dark.err[0,frames,:,:],axis=0)
-                    gdqimage = dark.groupdq[0,frames[-1],:,:]
+                    #If averaging needs to be done
+                    if self.params['Readout']['nframe'] > 1:
+                        accumimage = np.mean(dark.data[integ,frames,:,:],axis=0)
+                        errimage = np.mean(dark.err[integ,frames,:,:],axis=0)
+                        gdqimage = dark.groupdq[integ,frames[-1],:,:]
 
-                    #If no averaging needs to be done
-                else:
-                    accumimage = dark.data[0,frames[0],:,:]
-                    errimage = dark.err[0,frames[0],:,:]
-                    gdqimage = dark.groupdq[0,frames[0],:,:]
+                        #If no averaging needs to be done
+                    else:
+                        accumimage = dark.data[integ,frames[0],:,:]
+                        errimage = dark.err[integ,frames[0],:,:]
+                        gdqimage = dark.groupdq[integ,frames[0],:,:]
 
-                #now add the averaged dark frame to the synthetic data, which has already been
-                #placed into the correct readout pattern
-                outdark[i,:,:] += accumimage
-                outerr[i,:,:] += errimage
-                outgdq[i,:,:] = gdqimage
+                    outdark[integ,i,:,:] += accumimage
+                    outerr[integ,i,:,:] += errimage
+                    outgdq[integ,i,:,:] = gdqimage
 
-                #increment the frame indexes
-                frames = frames + deltaframe
+                    #increment the frame indexes
+                    frames = frames + deltaframe
 
         elif (self.params['Readout']['readpatt'] == darkpatt):
             #if the input dark is not RAPID, or if the readout pattern of the input dark and
-            #the output ramp match, then no averaging needs to be done and we can simply add
-            #the synthetic groups to the dark current groups.
-            outdark = dark.data[0,0:self.params['Readout']['ngroup'],:,:]
-            outerr = dark.err[0,0:self.params['Readout']['ngroup'],:,:]
-            outgdq = dark.groupdq[0,0:self.params['Readout']['ngroup'],:,:]
+            #the output ramp match, then no averaging needs to be done 
+            outdark = dark.data[:,0:self.params['Readout']['ngroup'],:,:]
+            outerr = dark.err[:,0:self.params['Readout']['ngroup'],:,:]
+            outgdq = dark.groupdq[:,0:self.params['Readout']['ngroup'],:,:]
         else:
             #This check should already have been done, but just to be sure...
             print("WARNING: dark current readout pattern is {} and requested output is {}.".format(darkpatt,self.params['Readout']['readpatt']))
@@ -2263,14 +2365,18 @@ class RampSim():
 
 
         #Now place the reorganized dark into the model instance and update the appropriate metadata
-        dark.data = np.expand_dims(outdark,axis=0)
+        #dark.data = np.expand_dims(outdark,axis=0)
+        dark.data = outdark
         dark.meta.exposure.readpatt = self.params['Readout']['readpatt'] 
         dark.meta.exposure.nframes = self.params['Readout']['nframe']
         dark.meta.exposure.nskip = self.params['Readout']['nskip']
         dark.meta.exposure.ngroups = self.params['Readout']['ngroup']
-        dark.err = np.expand_dims(outerr,axis=0)
-        dark.groupdq = np.expand_dims(outgdq,axis=0)
-        
+        dark.meta.exposure.nint = self.params['Readout']['nint']
+        #dark.err = np.expand_dims(outerr,axis=0)
+        #dark.groupdq = np.expand_dims(outgdq,axis=0)
+        dark.err = outerr
+        dark.groupdq = outgdq
+
         return dark,darkzero
 
 
@@ -2408,6 +2514,9 @@ class RampSim():
         if len(image.shape) == 3:
             bady = 1
             badx = 2
+        elif len(image.shape) == 4:
+            bady = 2
+            badx = 3
 
         bad = np.where(values > limits)
         values[bad] = limits[bad[bady],bad[badx]]
@@ -2453,6 +2562,9 @@ class RampSim():
         newimage=np.zeros_like(signalimage,dtype=np.float)
         ndim=signalimage.shape
 
+        #adjust the seed each time dopoisson is run
+        np.random.seed()
+        
         #Find the appropriate quantum yield value for the filter
         if self.params['simSignals']['photonyield']:
             try:
@@ -2465,12 +2577,15 @@ class RampSim():
             for j in range(ndim[1]):
                 try:
                     newimage[i,j]=np.random.poisson(signalimage[i,j])
+                    #if ((i == 200) & (j==200)):
+                    #    print('signalimage {}, newimage {}'.format(signalimage[i,j],newimage[i,j]))
                 except:
                     try:
                         newimage[i,j]=np.random.poisson(np.absolute(signalimage[i,j]))
                     except:
                         print("Error: bad signal value at pixel (x,y)=({},{}) = {}".format(j,i,signalimage[i,j]))
-                        sys.exit()
+                        newimage[i,j] = 0.0
+                        #sys.exit()
 
                 if self.params['simSignals']['photonyield'] and pym1 > 0.000001 and newimage[i,j] > 0:
                     if self.params['simSignals']['pymethod']:
@@ -2484,10 +2599,17 @@ class RampSim():
                         fract = newimage[i,j] - int(newimage[i,j])
                         if self.generator2.random() < fract:
                             newimage[i,j] = newimage[i,j] + 1
+                            if ((i == 200) & (j==200)):
+                                print('fract is {}'.format(fract))
         return newimage
 
     
     def doCosmicRays(self,image,ngroup,iframe,nframe,ncr):
+        #change the seed each time this is run, or else simulated
+        #exposures that have more than 1 integration will have the
+        #same cosmic rays in each integration
+        self.generator1.seed()
+        
         #add cosmic rays to a frame
         nray = int(ncr)
 
@@ -2520,6 +2642,9 @@ class RampSim():
         #base for the simulated ramp
         self.dark = RampModel(self.params['Reffiles']['dark'])
 
+        #remove non-pipeline related keywords (e.g. CV3 temps/voltages)
+        self.dark.__delattr__('extra_fits')
+        
         #We assume that the input dark current integration is raw, which means
         #the data are in the original ADU measured by the detector. So the
         #data range should be no larger than 65536
@@ -2545,6 +2670,7 @@ class RampSim():
         self.detector = self.dark.meta.instrument.detector
         self.instrument = self.dark.meta.instrument.name
 
+        
     def cropDark(self,model):
         #cut the dark current array down to the size dictated by the
         #subarray bounds
@@ -2552,10 +2678,10 @@ class RampSim():
         if ((self.subarray_bounds[0] != 0) or (self.subarray_bounds[2] != (xd-1)) or (self.subarray_bounds[1] != 0) or (self.subarray_bounds[3] != (yd-1))):
             print("Information: a full frame dark ramp was provided as input, but a subarray was specified as output. Extracting the appropriate sub-array area.")
 
-            model.data = model.data[0:1,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-            model.err = model.err[0:1,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+            model.data = model.data[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+            model.err = model.err[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
             model.pixeldq = model.pixeldq[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-            model.groupdq = model.groupdq[0:1,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+            model.groupdq = model.groupdq[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
 
         #make sure that if the output is supposedly a 4-amplifier file, that the number of
         #pixels in the x direction is a multiple of 4.
@@ -2594,31 +2720,37 @@ class RampSim():
             div = (ngroup*(nskip+nframe)) / inputframes
             mod = (ngroup*(nskip+nframe)) % inputframes
             
-            #if more frames are needed than there are frames in the original dark, then make copies of the entire
-            #thing as many times as necessary, adding the signal from the previous final frame to each.
+            #if more frames are needed than there are frames in the original dark,
+            #then make copies of the entire
+            #thing as many times as necessary, adding the signal from the previous
+            #final frame to each.
             for ints in xrange(div-1):
-                extra_frames = np.copy(self.dark.data[0,:,:,:])
-                extra_frames = np.expand_dims(extra_frames,axis=0)
-                extra_err_frames = np.copy(self.dark.err[0,:,:,:])
-                extra_err_frames = np.expand_dims(extra_err_frames,axis=0)
-                extra_dq_frames = np.copy(self.dark.groupdq[0,:,:,:])
-                extra_dq_frames = np.expand_dims(extra_dq_frames,axis=0)
-                self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[0,-1,:,:]))
-                self.dark.err = np.hstack((self.dark.err,extra_err_frames+self.dark.err[0,-1,:,:]))
-                self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[0,-1,:,:]))
+                extra_frames = np.copy(self.dark.data)#[:,:,:,:])
+                extra_err_frames = np.copy(self.dark.err)#[:,:,:,:])
+                extra_dq_frames = np.copy(self.dark.groupdq)#[:,:,:,:])
+                self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[:,-1,:,:]))
+                self.dark.err = np.hstack((self.dark.err,extra_err_frames+self.dark.err[:,-1,:,:]))
+                self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[:,-1,:,:]))
             
             #At this point, if more frames are needed, but fewer than an entire copy of self.dark.data,
             #then add the appropriate number of frames here.
-            extra_frames = np.copy(self.dark.data[0,1:mod+1,:,:]) - self.dark.data[0,0,:,:]
-            extra_frames = np.expand_dims(extra_frames,axis=0)
-            extra_err_frames = np.sqrt(np.copy(self.dark.err[0,1:mod+1,:,:])**2 + self.dark.err[0,-1,:,:]**2)
-            extra_err_frames = np.expand_dims(extra_err_frames,axis=0)
-            extra_dq_frames = np.copy(self.dark.groupdq[0,1:mod+1,:,:])
-            extra_dq_frames = np.expand_dims(extra_dq_frames,axis=0)
-            self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[0,-1,:,:]))
+            extra_frames = np.copy(self.dark.data[:,1:mod+1,:,:]) - self.dark.data[:,0,:,:]
+            extra_err_frames = np.sqrt(np.copy(self.dark.err[:,1:mod+1,:,:])**2 + self.dark.err[:,-1,:,:]**2)
+            extra_dq_frames = np.copy(self.dark.groupdq[:,1:mod+1,:,:])
+            self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[:,-1,:,:]))
             self.dark.err = np.hstack((self.dark.err,extra_err_frames))
-            self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[0,-1,:,:]))
+            self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[:,-1,:,:]))
 
+        elif ngroup*(nskip+nframe) < inputframes:
+            #if there are more frames in the dark than we'll need, crop the extras
+            #in order to reduce memory use
+            self.dark.data = self.dark.data[:,0:ngroup*(nskip+nframe),:,:]
+            self.dark.err = self.dark.err[:,0:ngroup*(nskip+nframe),:,:]
+            self.dark.groupdq = self.dark.groupdq[:,0:ngroup*(nskip+nframe),:,:]
+            
+        self.dark.meta.exposure.ngroups = ngroup*(nskip+nframe)
+            
+            
     def CRfuncs(self,npix):
         #set up functions that will be used to generate cosmic ray hits
         crhits = npix * self.crrate * self.params['cosmicRay']['scale'] * self.frametime
@@ -2626,7 +2758,7 @@ class RampSim():
         self.generator1 = random.Random()
         self.generator1.seed(self.params['cosmicRay']['seed'])
         #Need a set of CRs for all frames, including those that are skipped, in order for the rate of CRs to be consistent.
-        crs_perframe = np.random.poisson(crhits,self.params['Readout']['ngroup'] * (self.params['Readout']['nframe']+self.params['Readout']['nskip']))
+        crs_perframe = np.random.poisson(crhits,self.params['Readout']['nint'] * self.params['Readout']['ngroup'] * (self.params['Readout']['nframe']+self.params['Readout']['nskip']))
         np.random.seed(self.params['simSignals']['poissonseed'])
         self.generator2 = random.Random()
         self.generator2.seed(self.params['simSignals']['poissonseed'])
@@ -3248,8 +3380,6 @@ class RampSim():
     def getPointSourceList_original(self):
         #read in the list of point sources to add, and adjust the
         #provided positions for astrometric distortion
-        #dummypos=' 00:00:00.00'
-        #dummydeg=0.00
 
         #find the array sizes of the PSF files in the library. Assume they are all the same.
         #We want the distance from the PSF peak to the edge, assuming the peak is centered
@@ -4789,6 +4919,12 @@ class RampSim():
             self.params['Readout']['ngroup'] = int(self.params['Readout']['ngroup'])
         except:
             print("WARNING: Input value of ngroup is not an integer.")
+            sys.exit
+
+        try:
+            self.params['Readout']['nint'] = int(self.params['Readout']['nint'])
+        except:
+            print("WARNING: Input value of nint is not an integer.")
             sys.exit
 
 

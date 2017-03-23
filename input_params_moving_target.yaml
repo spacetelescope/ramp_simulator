@@ -8,6 +8,7 @@ Readout:
   nframe: 1        #Number of frames per group
   nskip: 0         #Number of skipped frames between groups
   ngroup: 4              #Number of groups in integration
+  nint: 1           #Number of integrations
   namp: 4                               #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
   array_name: NRCA1_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
   subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format
