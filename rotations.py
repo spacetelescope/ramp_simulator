@@ -118,9 +118,10 @@ def getv2v3(attitude, ra, dec):
     urd = unit(ra, dec)
     invAtt = np.linalg.inv(attitude)
     uv = np.dot(invAtt,urd)
-    v = radec(uv)
-    v2 = 3600.0*v[0]
-    v3 = 3600.0*v[1]
+    (v2,v3) = radec(uv)
+    if v2 > 180.0: v2 = v2-360.0
+    v2 = 3600.0*v2
+    v3 = 3600.0*v3
     return (v2,v3)
     
 def posangle(attitude, v2,v3):
