@@ -363,7 +363,7 @@ class RampSim():
                 h0=fits.PrimaryHDU()
                 h1 = fits.ImageHDU(signalramp)
                 hl=fits.HDUList([h0,h1])
-                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_tragets_ramp.fits',overwrite=True)
+                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_targets_ramp.fits',overwrite=True)
 
 
         #ILLUMINATION FLAT
@@ -1733,9 +1733,9 @@ class RampSim():
         self.dark.meta.pointing.dec_v1 = self.dec
         self.dark.meta.pointing.pa_v3 = self.params['Telescope']['rotation']
 
-        ramptime = self.frametime*(2+self.params['Readout']['ngroup']*self.params['Readout']['nframe'])
+        ramptime = self.frametime*(2+self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
         #Add time for the reset frame....
-        rampexptime = self.frametime * (self.params['Readout']['ngroup']*self.params['Readout']['nframe'])
+        rampexptime = self.frametime * (self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
 
         # elapsed time from the end and from the start of the supposid ramp, in seconds
         # put the end of the ramp 1 second before the time the file is written
@@ -1821,17 +1821,17 @@ class RampSim():
         self.dark.meta.exposure.sample_time = 10
         self.dark.meta.exposure.frame_time = self.frametime 
         self.dark.meta.exposure.group_time = self.frametime*self.params['Readout']['nframe']
-        self.dark.meta.exposure.groupgap = 0
+        self.dark.meta.exposure.groupgap = self.params['Redout']['nskip']
 
         self.dark.meta.exposure.nresets_at_start = 2
         self.dark.meta.exposure.nresets_between_ints = 1
         self.dark.meta.exposure.integration_time = rampexptime
-        self.dark.meta.exposure.exposure_time = rampexptime #assumes only 1 integration per exposure
+        self.dark.meta.exposure.exposure_time = rampexptime * self.params['Readout']['nint']
 
         #set the exposure start time as the current time
         self.dark.meta.exposure.start_time = ct.mjd
-        self.dark.meta.exposure.end_time = ct.mjd + rampexptime/3600./24.
-        self.dark.meta.exposure.mid_time = ct.mjd + rampexptime/3600./24./2.
+        self.dark.meta.exposure.end_time = ct.mjd + self.dark.meta.exposure.exposure_time/3600./24.
+        self.dark.meta.exposure.mid_time = ct.mjd + self.dark.meta.exposure.exposure_time/3600./24./2.
 
         self.dark.meta.exposure.duration = ramptime
 
@@ -2926,10 +2926,10 @@ class RampSim():
 
 
         #Save the image containing all of the added sources from the 'sky'
-        if self.params['Output']['save_intermediates'] == True:
-            sourcesImageName = self.params['Output']['file'][0:-5] + '_AddedSourcesRateImage_elec_per_sec.fits'
-            self.saveSingleFits(signalimage,sourcesImageName)
-            print("Image of added sources from the 'sky' saved as {}".format(sourcesImageName))
+        #if self.params['Output']['save_intermediates'] == True:
+        #    sourcesImageName = self.params['Output']['file'][0:-5] + '_AddedSourcesRateImage_elec_per_sec.fits'
+        #    self.saveSingleFits(signalimage,sourcesImageName)
+        #    print("Image of added sources from the 'sky' saved as {}".format(sourcesImageName))
 
 
         #Save the final rate image of added signals
