@@ -7,8 +7,8 @@ Readout:
   readpatt: RAPID        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized
   nframe: 1        #Number of frames per group
   nskip: 0         #Number of skipped frames between groups
-  ngroup: 10              #Number of groups in integration
-  nint: 1          #Number of integrations
+  ngroup: 3              #Number of groups in integration
+  nint: 1          #Number of integrations in output exposure
   namp: 4                               #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
   array_name: NRCA1_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
   subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format
@@ -27,8 +27,8 @@ Reffiles:                                 #Set to None or leave blank if you wis
   phot: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/nircam_mag15_countrates.list                  #File with list of all filters and associated quantum yield values and countrates for mag 15 star
   pixelflat: None 
   illumflat: None                               #Illumination flat field file
-  astrometric: /ifs/jwst/wit/witserv/data4/nrc/hilbert/distortion_reference_file_testing/reffiles_27Oct2016/NRCA1_FULL_distortion.asdf             #Astrometric distortion file (asdf)
-  distortion_coeffs: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_SIAF_2016-09-29.csv           #CSV file containing distortion coefficients
+  astrometric: /ifs/jwst/wit/witserv/data4/nrc/hilbert/distortion_reference_file/jwreftools/nircam/NRCA1_FULL_distortion.asdf #Astrometruc distortion file (asdf)
+  distortion_coeffs: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_SIAF_2016-11-21.csv           #CSV file containing distortion coefficients
   ipc: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/ipc/NRCA1_17004_IPCDeconvolutionKernel_2016-03-18_ssbipc_DMSorient.fits                        #File containing IPC kernel to apply
   invertIPC: True       #Invert the IPC kernel before the convolution. True or False. Use True if the kernel is designed for the removal of IPC effects, like the JWST reference files are.
   crosstalk: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/xtalk20150303g0.errorcut.txt              #File containing crosstalk coefficients
@@ -48,7 +48,7 @@ cosmicRay:
   library: SUNMIN                   #Type of cosmic ray environment (SUNMAX, SUNMIN, FLARE)
   scale: 1.5                                 #Cosmic ray scaling factor
   suffix: IPC_NIRCam_A1             #Suffix of library file names
-  seed: 973415286                            #Seed for random number generator
+  seed: 973415283                            #Seed for random number generator
 
 simSignals:
   pointsource: point_sources_test.list   #File containing a list of point sources to add (x,y locations and magnitudes)
@@ -57,7 +57,7 @@ simSignals:
   psfpixfrac: 0.1                           #Fraction of a pixel between entries in PSF library (e.g. 0.1 = files for PSF centered at 0.1 pixel intervals within pixel)
   psfwfe: 155                               #PSF WFE value (0,115,123,132,136,150,155)
   psfwfegroup: 0                             #WFE realization group (0 to 9)
-  galaxyListFile: galaxies_smalllist_test.list    #File containing a list of positions/ellipticities/magnitudes of galaxies to simulate
+  galaxyListFile: None    #File containing a list of positions/ellipticities/magnitudes of galaxies to simulate
   extended: None                  #Extended emission count rate image file name
   extendedscale: 2.0                          #Scaling factor for extended emission image
   extendedCenter: 1024,1024                   #x,y pixel location at which to place the extended image if it is smaller than the output array size
@@ -67,7 +67,7 @@ simSignals:
   movingTargetExtended: None  #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)
   movingTargetConvolveExtended: True       #convolve the extended moving targets with PSF before adding.
 
-  movingTargetToTrack: None #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to 'moving_target'  
+  movingTargetToTrack: None  #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to 'moving_target'  
 
   zodiacal:  None                          #Zodiacal light count rate image file 
   zodiscale:  1.0                            #Zodi scaling factor
@@ -84,21 +84,31 @@ Telescope:
   rotation: 0.0                    #y axis rotation (degrees E of N)
 
 newRamp:
-  combine_method: PROPER      #use PROPER. Prvious option, STANDARD, not supported
-  proper_combine: BOTH        #HOTPIX, COSMICRAYS, BOTH - pixels to use the "PROPER" combine_method on
-  proper_signal_limit: 5000   #Signal level (ADU), above which to combine simulated signals and dark via proper method
-  linearized_darkfile: None   #Name of file containing the linearized version of the dark current ramp specified in Reffiles section above (If 'none', the linearized ramp is constructed on the fly)
-  dq_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/dq_init.cfg  #DQ Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
-  sat_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/saturation.cfg  #Saturation Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
-  superbias_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/superbias.cfg  #Superbias Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
-  refpix_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/refpix.cfg  #Refpix Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
-  linear_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/linearity.cfg  #Linearity Step pipeline configuration file. Only needed if linearized_darkfile is not provided.
+  combine_method: PROPER
+  proper_combine: BOTH
+  proper_signal_limit: 5000
+  linearized_darkfile: None
+  dq_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/dq_init.cfg
+  sat_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/saturation.cfg
+  superbias_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/superbias.cfg
+  refpix_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/refpix.cfg
+  linear_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/linearity.cfg
 
 Output:
-  file: test_ramp_moving_target_track.fits    #Output filename
+  file: test.fits    #Output filename
   format: DMS                            #Output file format Options: DMS, SSR(not yet implemented)
-  save_intermediates: True               #Save intermediate products separately (point source image, etc)
+  save_intermediates: False               #Save intermediate products separately (point source image, etc)
   grism_source_image: False               #grism
   grism_input_only: False                  #grism
   unsigned: True                         #Output unsigned integers? (0-65535 if true. -32768 to 32768 if false)
   dmsOrient: True                        #Output in DMS orientation (vs. fitswriter orientation).
+  program_number: '99999'                  #Program Number
+  observation_number: '001'               #Obeservation Number
+  visit_number:  '001'                     #Visit Number
+  visit_group: '01'                       #Visit Group
+  obs_id: 'A1'                           #Observation ID
+  visit_id: 'AA'                          #Visit ID
+  sequence_id: '1'                       #Sequence ID
+  activity_id: '01'                      #activity ID - increment for each dither, keep same for each detector within exposure
+  exposure_number: '1'                   #exposure number
+  
