@@ -1290,14 +1290,16 @@ class RampSim():
         
                 #Remove the non-linearity from the saturation map values, arriving at a
                 #saturation map of corrected signals
-                adj_satmap = self.nonLinFunc(self.satmap,nonlin,self.satmap)
+                #this is now done within dononlin
+                #adj_satmap = self.nonLinFunc(self.satmap,nonlin,self.satmap)
+                pass
             else:
-                adj_satmap = np.zeros_like(newimage) + self.params['nonlin']['limit']
-
+                self.satmap = np.zeros_like(newimage) + self.params['nonlin']['limit']
+                
             #Now insert the non-linearity into the ramp as well as the zeroframe if it exists
-            properramp = self.doNonLin(lin_outramp,nonlin,adj_satmap)
+            properramp = self.doNonLin(lin_outramp,nonlin,self.satmap)#adj_satmap)
             if lin_zeroframe is not None:
-                properzero = self.doNonLin(lin_zeroframe,nonlin,adj_satmap)
+                properzero = self.doNonLin(lin_zeroframe,nonlin,self.satmap)#adj_satmap)
             else:
                 properzero = None
         else:
@@ -1690,15 +1692,16 @@ class RampSim():
         self.dark.meta.origin = 'STScI'
         self.dark.meta.filename = filename
         self.dark.meta.filetype = 'raw'
-        self.dark.meta.observation.obs_id = '0'
-        self.dark.meta.observation.visit_number = '0'
-        self.dark.meta.observation.program = '0'
-        self.dark.meta.observation.observation_number = '0'
-        self.dark.meta.observation.visit_number = '0'
-        self.dark.meta.observation.visit_group = '0'
-        self.dark.meta.observation.sequence_id = '0'
-        self.dark.meta.observation.activity_id ='0'
-        self.dark.meta.observation.exposure_number = '0'
+        self.dark.meta.observation.obs_id = self.params['Output']['obs_id']
+        self.dark.meta.observation.visit_id = self.params['Output']['visit_id']
+        self.dark.meta.observation.visit_number = self.params['Output']['visit_number']
+        self.dark.meta.observation.program_number = self.params['Output']['program_number']
+        self.dark.meta.observation.observation_number = self.params['Output']['observation_number']
+        self.dark.meta.observation.visit_number = self.params['Output']['visit_number']
+        self.dark.meta.observation.visit_group = self.params['Output']['visit_group']
+        self.dark.meta.observation.sequence_id = self.params['Output']['sequence_id']
+        self.dark.meta.observation.activity_id =self.params['Output']['activity_id']
+        self.dark.meta.observation.exposure_number = self.params['Output']['exposure_number']
     
         self.dark.meta.program.pi_name = 'UNKNOWN'
         self.dark.meta.program.title = 'UNKNOWN'
@@ -1707,7 +1710,7 @@ class RampSim():
         self.dark.meta.program.science_category = 'UNKNOWN'
         self.dark.meta.program.continuation_id = 0
 
-        self.dark.meta.target.catalog_name = 'UNKOWN'
+        self.dark.meta.target.catalog_name = 'UNKNOWN'
 
         self.dark.meta.wcsinfo.wcsaxes = 2
         self.dark.meta.wcsinfo.crval1 = self.ra
@@ -1821,7 +1824,7 @@ class RampSim():
         self.dark.meta.exposure.sample_time = 10
         self.dark.meta.exposure.frame_time = self.frametime 
         self.dark.meta.exposure.group_time = self.frametime*self.params['Readout']['nframe']
-        self.dark.meta.exposure.groupgap = self.params['Redout']['nskip']
+        self.dark.meta.exposure.groupgap = self.params['Readout']['nskip']
 
         self.dark.meta.exposure.nresets_at_start = 2
         self.dark.meta.exposure.nresets_between_ints = 1
@@ -5208,6 +5211,19 @@ class RampSim():
                 print("WARNING: input slew angle {} is not an integer or float.".format(self.params['Telescope']['slewAngle']))
                 sys.exit()
 
+
+        #check the output metadata, including visit and observation numbers, obs_id, etc
+
+        kwchecks = ['program_number','observation_number','visit_number','visit_group',
+                    'obs_id','visit_id','sequence_id','activity_id','exposure_number']
+        for quality in kwchecks:
+            try:
+                self.params['Output'][quality] = str(self.params['Output'][quality])
+            except:
+                print("WARNING: unable to convert {} to string. This is required.".format(quality))
+                sys.exit()
+                    
+                
                 
     def getDistortionCoefficients(self,table,from_sys,to_sys,aperture):
         '''from the table of distortion coefficients, get the coeffs that correspond

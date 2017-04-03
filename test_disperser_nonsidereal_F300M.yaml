@@ -103,3 +103,12 @@ Output:
   grism_input_only: True                 #grism
   unsigned: True                         #Output unsigned integers? (0-65535 if true. -32768 to 32768 if false)
   dmsOrient: True                        #Output in DMS orientation (vs. fitswriter orientation).
+  program_number: 99999                  #Program Number
+  observation_number: 001               #Obeservation Number
+  visit_number:  001                     #Visit Number
+  visit_group: 01                       #Visit Group
+  obs_id: 00                            #Observation ID
+  visit_id: 00                          #Visit ID
+  sequence_id: 1                       #Sequence ID
+  activity_id: 01                      #activity ID - increment for each dither, keep same for each detector within exposure
+  exposure_number: 1                   #exposure number
