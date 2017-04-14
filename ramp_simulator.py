@@ -1,4 +1,4 @@
- #! /usr/bin/env python
+#! /usr/bin/env python
 
 '''
 Rewritten version of Kevin Volk's rampsim.py. Updated to be more general
@@ -380,8 +380,9 @@ class RampSim():
 
         #IPC EFFECTS
         if self.runStep['ipc']:
-            ipcimage,ipcimageheader = self.readCalFile(self.params['Reffiles']['ipc'])
-                
+            #ipcimage,ipcimageheader = self.readCalFile(self.params['Reffiles']['ipc'])
+            ipcimage = fits.getdata(self.params['Reffiles']['ipc'])
+
             #Assume that the IPC kernel is designed for the removal of IPC, which means we need to
             #invert it.
             if self.params['Reffiles']['invertIPC']:
@@ -507,7 +508,6 @@ class RampSim():
         #do that here
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
             proper_ramp,proper_zero = self.doProperCombine(signalramp,self.sbAndRefpixEffects,zeroModel.data[0,0,:,:],zero_sbAndRefEffects)
-
 
         #If the standard method will be used for at least some pixels, do that here.
         if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','STANDARD']:
@@ -837,7 +837,7 @@ class RampSim():
             units = 'e-'
             #indim = 3
             g,yd,xd = arrayshape
-            tgroup = self.frametime*self.params['Readout']['nframe']
+            tgroup = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
             
         grismDirectName = self.params['Output']['file'][0:-5] + '_GrismDirectData.fits'
         xcent_fov = xd / 2
@@ -872,7 +872,8 @@ class RampSim():
             #If averaging needs to be done
             if outnframe > 1:
                 newpatt[i,:,:] = np.mean(array[frames,:,:],axis=0)
-
+                print("In changereadpattern, averaging frames {}".format(frames))
+                
             #If no averaging needs to be done
             else:
                 newpatt[i,:,:] = array[frames[0],:,:]
@@ -1238,7 +1239,6 @@ class RampSim():
         syn_linear_ramp *= maskimage
         syn_linear_zero *= maskimage
 
-            
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
             synthName = self.params['Output']['file'][0:-5] + '_LinearSyntheticSignalRamp.fits'
@@ -1255,7 +1255,6 @@ class RampSim():
             lin_zeroframe = syn_linear_zero + zeroframe
         else:
             lin_zeroframe = None
-
 
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
@@ -1306,14 +1305,6 @@ class RampSim():
             properramp = lin_outramp
             properzero = lin_zeroframe
 
-        #Save for testing
-        #h0 = fits.PrimaryHDU()
-        #h1 = fits.ImageHDU(properramp)
-        #hl = fits.HDUList([h0,h1])
-        #ffff = self.params['Output']['file'][0:-5] + '_synPlusDark_addNonlin.fits'
-        #hl.writeto(ffff,overwrite=True)
-
-
         #Look for pixels with crazy values. These are most likely due to the Newton's Method being
         #used to insert the non-linearity failing to converge, probably from bad linearity coefficients
         #or a bad initial guess. Set these pixels' signals to zero
@@ -1340,15 +1331,18 @@ class RampSim():
             properramp += refpix_effects#[0,:,:,:]
             properzero += zeroRefEffects
 
-        #Set the bad pixels to zero
-        #properramp[bad] = 0.
+        #Outputs need to be 16-bit integers
+        toohigh = properramp > 65535
+        properramp[toohigh] = 65535
+        toohigh = properzero > 65535
+        properzero[toohigh] = 65535
             
         #To simulate raw data, we need integers
         properramp = np.around(properramp)
-        properramp = properramp.astype(np.int32)
+        properramp = properramp.astype(np.uint16)
         if properzero is not None:
             properzero = np.around(properzero)
-            properzero = properzero.astype(np.int32)
+            properzero = properzero.astype(np.uint16)
             
         return properramp,properzero
         
@@ -1639,10 +1633,13 @@ class RampSim():
         imshape = ramp.shape
         if len(imshape) == 3:
             ramp = np.expand_dims(ramp,axis=0)
+
+        toohigh = ramp > 65535
+        ramp[toohigh] = 65535
             
         #insert data into model
-        self.dark.data = ramp
-        self.dark.err = np.zeros_like(ramp,dtype=np.int32)
+        self.dark.data = ramp.astype(np.uint16)
+        self.dark.err = np.zeros_like(ramp,dtype=np.uint16)
         self.dark.groupdq = np.zeros_like(ramp,dtype=np.uint8)
 
         if len(self.dark.err.shape) == 3:
@@ -1658,8 +1655,14 @@ class RampSim():
             if len(zeroframe.shape) == 2:
                 zeroframe = np.expand_dims(zeroframe,0)
                 #place the zero frame into the model
-                self.dark.zeroframe = zeroframe
-
+                self.dark.zeroframe = zeroframe.astype(np.uint16)
+            elif len(zeroframe.shape) == 3:
+                self.dark.zeroframe = zeroframe.astype(np.uint16)
+        else:
+            print("Zeroframe not present. Setting to all zeros")
+            numint,numgroup,ys,xs = ramp.shape
+            self.dark.zeroframe = np.zeros((numint,ys,xs))
+                
         #EXPTYPE OPTIONS
         #exptypes = ['NRC_IMAGE','NRC_GRISM','NRC_TACQ','NRC_CORON','NRC_DARK','NRC_TSIMAGE','NRC_TSGRISM']
         #nrc_tacq and nrc_coron are not currently implemented.
@@ -1717,7 +1720,7 @@ class RampSim():
         self.dark.meta.wcsinfo.crval2 = self.dec
         self.dark.meta.wcsinfo.crpix1 = self.refpix_pos['x']+1. 
         self.dark.meta.wcsinfo.crpix2 = self.refpix_pos['y']+1.
-        self.dark.meta.wcsinfo.ctype1 = 'RA--TAN'
+        self.dark.meta.wcsinfo.ctype1 = 'RA---TAN'
         self.dark.meta.wcsinfo.ctype2 = 'DEC--TAN'
         self.dark.meta.wcsinfo.cunit1 = 'deg' 
         self.dark.meta.wcsinfo.cunit2 = 'deg'
@@ -1725,7 +1728,7 @@ class RampSim():
         self.dark.meta.wcsinfo.v3_ref = self.v3_ref
         self.dark.meta.wcsinfo.vparity = self.parity
         self.dark.meta.wcsinfo.v3yangle = self.v3yang
-        self.dark.meta.wcsinfo.cdelt1 = (0.-self.xsciscale) / 3600.
+        self.dark.meta.wcsinfo.cdelt1 = self.xsciscale / 3600.
         self.dark.meta.wcsinfo.cdelt2 = self.ysciscale / 3600.
         
         self.dark.meta.target.ra = self.ra
@@ -1823,7 +1826,7 @@ class RampSim():
 
         self.dark.meta.exposure.sample_time = 10
         self.dark.meta.exposure.frame_time = self.frametime 
-        self.dark.meta.exposure.group_time = self.frametime*self.params['Readout']['nframe']
+        self.dark.meta.exposure.group_time = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
         self.dark.meta.exposure.groupgap = self.params['Readout']['nskip']
 
         self.dark.meta.exposure.nresets_at_start = 2
@@ -1839,8 +1842,29 @@ class RampSim():
         self.dark.meta.exposure.duration = ramptime
 
         self.dark.save(filename)
+
+        #now, because the ramp model saves the data and error arrays
+        #as 32-bit floats when the original raw data will be 16 bit
+        #integers, open the output file using astropy and adjust
+        hh = fits.open(filename)
+        for e in [1,4,5]:
+            hh[e].data = hh[e].data.astype(np.uint16)  
+
+        #also, to simulate more exactly the level 1b output files
+        #we need to remove the error, pixeldq, and groupdq extensions
+        #so let's keep only the primary, sci, and zeroframe extensions
+        h1b_0 = hh[0]
+        h1b_1 = hh[1]
+        h1b_5 = hh[5]
+        newhlist = fits.HDUList([h1b_0,h1b_1,h1b_5])
+        newhlist.writeto(filename,overwrite=True)
+        hh.close()
+      
+        #hh.writeto(filename,overwrite=True)
+        
         print("Final output integration saved to {}".format(filename))
         return
+
 
     def readCRFiles(self):
         #read in the 10 files that comprise the cosmic ray library
@@ -1914,6 +1938,15 @@ class RampSim():
             if integ == 0:
                 zero = mod_ramp[0,:,:] + crs_only_zero
 
+            #save simulated signal ramp, includeing poisson noise (but not CRs)
+            #just before rearranging into requested readout pattern
+            if self.params['Output']['save_intermediates']:
+                h0 = fits.PrimaryHDU()
+                h1 = fits.ImageHDU(mod_ramp)
+                hlist = fits.HDUList([h0,h1])
+                hlist.writeto(self.params['Output']['file'][0:-5] + '_simulatedSources_RAPIDramp.fits',overwrite=True)
+                
+                
             #rearrange ramp into the requested readout pattern, to match crs_only_ramp
             if self.params['Readout']['readpatt'].upper() != 'RAPID':
                 rearrangeramp = self.changeReadPattern(mod_ramp,self.params['Readout']['nframe'],self.params['Readout']['nskip'],self.params['Readout']['ngroup'])
@@ -1926,9 +1959,11 @@ class RampSim():
             if integ == 0:
                 arrgroup,arry,arrx = rearrangeramp.shape
                 final_ramp = np.zeros((self.params['Readout']['nint'],arrgroup,arry,arrx))
-
+                final_zero = np.zeros((self.params['Readout']['nint'],arry,arrx))
+                
             final_ramp[integ,:,:,:] = rearrangeramp
-
+            final_zero[integ,:,:] = zero
+            
         #print(final_ramp[:,:,400,400])
         #h0t=fits.PrimaryHDU(final_ramp)
         #hllt=fits.HDUList([h0t])
@@ -1936,7 +1971,7 @@ class RampSim():
         #print('exiting to check ramp after poisson noise added')
         #sys.exit()
             
-        return final_ramp,zero
+        return final_ramp,final_zero
 
 
     
@@ -2020,8 +2055,9 @@ class RampSim():
                     
                 #if the frame is not one to be skipped (according to nskip)
                 #then add it to the output group here
-                if j >= self.params['Readout']['nskip']:
-
+                #if j >= self.params['Readout']['nskip']:
+                if j < self.params['Readout']['nframe']:
+                    
                     #if nframe is > 1, then we need to average the nframe frames and
                     #place that into the group.
                     if self.params['Readout']['nframe'] != 1:
@@ -2251,7 +2287,8 @@ class RampSim():
         if ((darkpatt == 'RAPID') and (self.params['Readout']['readpatt'] != 'RAPID')): 
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
-            frames = np.arange(self.params['Readout']['nskip'],deltaframe)
+            #frames = np.arange(self.params['Readout']['nskip'],deltaframe)
+            frames = np.arange(0,self.params['Readout']['nframe'])
             accumimage = np.zeros_like(synthetic[0,:,:],dtype=np.int32)
 
             #Loop over integrations
@@ -2260,7 +2297,7 @@ class RampSim():
                 #Loop over groups
                 for i in range(self.params['Readout']['ngroup']):
                     #average together the appropriate frames, skip the appropriate frames
-                    print('Averaging dark current ramp. Frames {}, to become group {}'.format(frames,i))
+                    print('Averaging dark current ramp in addSyntheticToDark. Frames {}, to become group {}'.format(frames,i))
 
                     #If averaging needs to be done
                     if self.params['Readout']['nframe'] > 1:
@@ -2324,7 +2361,8 @@ class RampSim():
         if ((darkpatt == 'RAPID') and (self.params['Readout']['readpatt'] != 'RAPID')): 
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
-            frames = np.arange(self.params['Readout']['nskip'],deltaframe)
+            #frames = np.arange(self.params['Readout']['nskip'],deltaframe)
+            frames = np.arange(0,self.params['Readout']['nframe'])
             accumimage = np.zeros_like(outdark[0,0,:,:],dtype=np.int32)
 
             #Look over integrations
@@ -3749,7 +3787,7 @@ class RampSim():
                 #Now find out how large the extended source image is, so we
                 #know if all, part, or none of it will fall in the field of view
                 ext_stamp = fits.getdata(values['filename'])
-                if len(ext_stamp) != 2:
+                if len(ext_stamp.shape) != 2:
                     ext_stamp = fits.getdata(values['filename'],1)
 
                 eshape = np.array(ext_stamp.shape)
@@ -3824,7 +3862,8 @@ class RampSim():
                         #Assume the input stamp image is in units of e/sec then.
                         print("No magnitude given for extended source in {}.".format(values['filename']))
                         print("Assuming the original file is in units of counts per sec.")
-                        countrate = norm_factor
+                        print("Multiplying original file values by 'extendedscale'.")
+                        countrate = norm_factor * self.params['simSignals']['extendedscale']
                         framecounts = countrate*self.frametime
                         magwrite = 99.99999
 
@@ -4450,11 +4489,11 @@ class RampSim():
             xoff = math.floor(xpos)
             yoff = math.floor(ypos)
 
-            #desired counts per second in the point source
+            #desired counts per second in the source
             counts = entry['countrate_e/s'] #/ self.frametime
 
             #Extract the appropriate subarray from the PSF image if necessary
-            #Assume that the brightest pixel corresponds to the peak of the psf
+            #Assume that the brightest pixel corresponds to the peak of the source
             psfdims = stamp.shape
             nyshift,nxshift = np.array(psfdims) / 2
             nx = int(xoff)
@@ -5220,7 +5259,7 @@ class RampSim():
             try:
                 self.params['Output'][quality] = str(self.params['Output'][quality])
             except:
-                print("WARNING: unable to convert {} to string. This is required.".format(quality))
+                print("WARNING: unable to convert {} to string. This is required.".format(self.params['Output'][quality]))
                 sys.exit()
                     
                 
