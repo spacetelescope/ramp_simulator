@@ -155,9 +155,9 @@ class RampSim():
                     #print('linearized the dark current zero frame. {}'.format(zeroModel.data.shape))
 
                     #now crop the zero frame to match the specified output size
-                    zeroModel = self.cropDark(zeroModel)
-                    zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
-                    print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
+                    #zeroModel = self.cropDark(zeroModel)
+                    #zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                    #print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
             else:
                 zeroModel = self.readLinearDark()
                 self.sbAndRefpixEffects = None
@@ -169,6 +169,9 @@ class RampSim():
             if zeroModel is not None:
                 zeroModel = self.cropDark(zeroModel)
                 print('cropped #2 the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
+
+            if zero_sbAndRefEffects is not None:
+                zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
                 
             #save the linearized dark for testing
             if self.params['Output']['save_intermediates']:
@@ -187,8 +190,7 @@ class RampSim():
             h1 = fits.ImageHDU(self.dark.data)
             hl=fits.HDUList([h0,h1])
             hl.writeto(self.params['Output']['file'][0:-5] + '_croppedDark.fits',overwrite=True)
-        
-
+            
         #Find the difference between the cropped original dark and the cropped linearized dark
         #This will be used later to re-add the superbias and refpix-associated signal to the final
         #output ramp.
@@ -1876,7 +1878,10 @@ class RampSim():
             #str1='_%2.2d_IPC.fits' % (i)
             name = self.crfile + str1
             #name = self.params['cosmicRay']['path'] + self.fileList['cosmicrays'] + str1
-            im,head = self.readCalFile(name)
+            with fits.open(name) as h:
+                im = h[1].data
+                head = h[0].header
+            #im,head = self.readCalFile(name)
             self.cosmicrays.append(im)
             self.cosmicraysheader.append(head)
 
@@ -2673,7 +2678,7 @@ class RampSim():
             l2=10+(j2-k)
 
             image[i1:i2,j1:j2]=image[i1:i2,j1:j2]+crimage[k1:k2,l1:l2]
-
+                            
             self.cosmicraylist.write("{} {} {} {} {} {} {}\n".format((j2-j1)/2+j1,(i2-i1)/2+i1,ngroup,iframe,n,m,np.max(crimage[k1:k2,l1:l2])))
         return image
 
@@ -5448,18 +5453,8 @@ class RampSim():
         #calculate the exposure time of a single frame of the proposed output ramp
         #based on the size of the croped dark current integration
         numint,numgrp,yd,xd = self.dark.data.shape
-
-        self.frametime = (yd+1)*(int(xd/self.params['Readout']['namp']+0.01)+12)/100000.
-
-        if yd < 65 and xd < 65:
-            if self.params['Readout']['namp'] == 1:
-                self.frametime = (yd+1)*(xd+6)/100000.
-
-        # if the read-out is a sub-array, add the rolling line resets time (nresetlines times 
-        # the read time of 10 microseconds)...
-        if yd < 2048 and xd < 2048:
-            self.frametime = self.frametime+self.params['Inst']['nresetlines'] / 100000.
-
+        self.frametime = (xd/self.params['Readout']['namp'] + 12.) * (yd+1) * 10.00 * 1.e-6
+            
 
     def checkParamVal(self,value,typ,vmin,vmax,default):
         #make sure the input value is a float and between min and max
