@@ -5,23 +5,6 @@ Rewritten version of Kevin Volk's rampsim.py. Updated to be more general
 and flexible such that other instruments can use the code
 
 STILL DON'T HAVE PSFS FOR WLP8+FILTER COMBINATIONS
-
-Allowed optics:
-SW:
-CLEAR+ 070,090,115,150,200,140M,182M,210M,197N,212N
-WLP8+ 150,200,140M,182M,210M,197N,212N
-F164N+ 150W2
-F162M+ 150W2
-
-LW:
-when SW requested is [CLEAR,F162M,F164N]: then appropriate LW filters are:
-250M,300M,335M,360M,410M,430M,460M,480M,277W,322W2,356W,444W
-when SW requested is WLP8, allowed filters are: 322W2+323N, 444W+405N, 444W+466N, 444W+470N
-
-adjust to create nint > 1??
-or do nint=1 and output source catalogs at end of integration. Use that
-as input for the next integration.
-
 '''
 
 import argparse,sys, glob, os
@@ -29,7 +12,6 @@ import yaml
 from copy import copy
 import scipy.ndimage.interpolation as interpolation
 import scipy.signal as s1
-#from jwst_lib.models import RampModel #build 6
 from jwst.datamodels import RampModel #build 7
 import numpy as np
 import math,random
@@ -177,7 +159,8 @@ class RampSim():
             if self.params['Output']['save_intermediates']:
                 h0=fits.PrimaryHDU()
                 h1 = fits.ImageHDU(self.linDark.data)
-                hl=fits.HDUList([h0,h1])
+                h2 = fits.ImageHDU(zeroModel.data)
+                hl=fits.HDUList([h0,h1,h2])
                 hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
 
         #Now crop the dark current ramp 
@@ -578,6 +561,15 @@ class RampSim():
             sys.exit()
 
 
+    def getAttitudeMatrix(self):
+        #create an attitude_matrix from the distortion reference file model and other info
+        #calculate a local roll angle for the aperture
+        self.local_roll = set_telescope_pointing.compute_local_roll(self.params['Telescope']['rotation'],self.ra,self.dec,self.v2_ref,self.v3_ref)
+        #create attitude_matrix    
+        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.local_roll)
+        return attitude_matrix
+
+            
     def darkints(self):
         #check the number of integrations in the dark current file and compare with the
         #requested number of integrations. Add/remove integrations if necessary
@@ -629,9 +621,13 @@ class RampSim():
 
         #get countrate for mag 15 source, for scaling later
         try:
-            mag15rate = self.countvalues[self.params['Readout']['filter']]
+            if self.params['Readout']['pupil'][0].upper() == 'F':
+                usephot = 'pupil'
+            else:
+                usephot = 'filter'
+            mag15rate = self.countvalues[self.params['Readout'][usephot]]
         except:
-            print("Unable to find mag 15 countrate for {} filter in {}.".format(self.params['Readout']['filter'],self.params['Reffiles']['phot']))
+            print("Unable to find mag 15 countrate for {} filter in {}.".format(self.params['Readout'][usephot],self.params['Reffiles']['phot']))
             sys.exit()
 
 
@@ -698,9 +694,9 @@ class RampSim():
             wfegroup = self.params['simSignals']['psfwfegroup']
             basename = self.params['simSignals']['psfbasename'] + '_'
             if wfe == 0:
-                psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
+                psfname=basename+self.params['simSignals'][usefilt].lower()+'_zero'
             else:
-                psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
+                psfname=basename+self.params['Readout'][usefilt].lower()+"_"+str(wfe)+"_"+str(wfegroup)
 
             centerpsffile = self.params['simSignals']['psfpath'] + psfname + '_0p0_0p0.fits'
             try:
@@ -740,9 +736,9 @@ class RampSim():
             wfegroup = self.params['simSignals']['psfwfegroup']
             basename = self.params['simSignals']['psfbasename'] + '_'
             if wfe == 0:
-                psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
+                psfname=basename+self.params['simSignals'][usefilt].lower()+'_zero'
             else:
-                psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
+                psfname=basename+self.params['Readout'][usefilt].lower()+"_"+str(wfe)+"_"+str(wfegroup)
 
             centerpsffile = self.params['simSignals']['psfpath'] + psfname + '_0p0_0p0.fits'
             try:
@@ -822,7 +818,11 @@ class RampSim():
         module = fits.getval(self.params['Reffiles']['dark'],'module')
         
         zps = ascii.read(self.params['Reffiles']['flux_cal'])
-        mtch = ((zps['Filter'] == self.params['Readout']['filter']) & (zps['Module'] == module))
+        if self.params['Readout']['pupil'][0] == 'F':
+            usephot = 'pupil'
+        else:
+            usephot = 'filter'
+        mtch = ((zps['Filter'] == self.params['Readout'][usephot]) & (zps['Module'] == module))
         photflam = zps['PHOTFLAM'][mtch][0]
         photfnu = zps['PHOTFNU'][mtch][0]
         pivot = zps['Pivot_wave'][mtch][0]
@@ -849,10 +849,14 @@ class RampSim():
         kw['ycenter'] = ycent_fov
         kw['units'] = units
         kw['TGROUP'] = tgroup
-        kw['filter'] = self.params['Readout']['filter']
-        kw['photflam'] = photflam
-        kw['photfnu'] = photfnu
-        kw['pivotwav'] = pivot
+        if self.params['Readout']['pupil'][0].upper() == 'F':
+            usefilt = 'pupil'
+        else:
+            usefilt = 'filter'
+        kw['filter'] = self.params['Readout'][usefilt]
+        kw['PHOTFLAM'] = photflam
+        kw['PHOTFNU'] = photfnu
+        kw['PHOTPLAM'] = pivot * 1.e4 #put into angstroms
         self.saveSingleFits(input,grismDirectName,key_dict=kw)
         print("Data to be used as input to make dispersed grism image(s) saved as {}".format(grismDirectName))
 
@@ -894,9 +898,13 @@ class RampSim():
 
         #get countrate for mag 15 source, for scaling later
         try:
-            mag15rate = self.countvalues[self.params['Readout']['filter']]
+            if self.params['Readout']['pupil'][0].upper() == 'F':
+                usephot = 'pupil'
+            else:
+                usephot = 'filter'
+            mag15rate = self.countvalues[self.params['Readout'][usephot]]
         except:
-            print("Unable to find mag 15 countrate for {} filter in {}.".format(self.params['Readout']['filter'],self.params['Reffiles']['phot']))
+            print("Unable to find mag 15 countrate for {} filter in {}.".format(self.params['Readout'][usephot],self.params['Reffiles']['phot']))
             print("Fix me!")
             sys.exit()
 
@@ -921,8 +929,10 @@ class RampSim():
         #create a matrix that can be used to translate between V2,V3 and RA,Dec
         #for any pixel.
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
-        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        attitude_matrix = self.getAttitudeMatrix()
 
+        
         #exposure times for all frames
         frameexptimes = self.frametime * np.arange(-1,self.params['Readout']['ngroup'] * (self.params['Readout']['nframe'] + self.params['Readout']['nskip']))
             
@@ -937,7 +947,7 @@ class RampSim():
         mt_integration = np.zeros((len(frameexptimes)-1,newdimsy,newdimsx))
 
         #Read in PSF for later convolution
-        psffile = self.params['simSignals']['psfpath'] + self.params['simSignals']['psfbasename'] + '_' + self.params['Readout']['filter'].lower() + '_' + str(self.params['simSignals']['psfwfe']) + '_' + str(self.params['simSignals']['psfwfegroup']) + '_0p0_0p0.fits'
+        psffile = self.params['simSignals']['psfpath'] + self.params['simSignals']['psfbasename'] + '_' + self.params['Readout'][usephot].lower() + '_' + str(self.params['simSignals']['psfwfe']) + '_' + str(self.params['simSignals']['psfwfegroup']) + '_0p0_0p0.fits'
         centerpsf = fits.getdata(psffile)
         centerpsf = self.cropPSF(centerpsf)
 
@@ -1200,7 +1210,12 @@ class RampSim():
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
             synthName = self.params['Output']['file'][0:-5] + '_syntheticSignalRamp.fits'
-            self.saveSingleFits(synthetic_ramp,synthName)
+            #self.saveSingleFits(synthetic_ramp,synthName)
+            h0 = fits.PrimaryHDU()
+            h1 = fits.ImageHDU(synthetic_ramp)
+            h2 = fits.ImageHDU(syn_zeroframe)
+            hl = fits.HDUList([h0,h1,h2])
+            hl.writeto(synthName,overwrite=True)
             print("Ramp of synthetic signals saved as {}".format(synthName))
             
         #add the synthetic ramp to the dark current ramp,
@@ -1244,7 +1259,12 @@ class RampSim():
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
             synthName = self.params['Output']['file'][0:-5] + '_LinearSyntheticSignalRamp.fits'
-            self.saveSingleFits(syn_linear_ramp,synthName)
+            #self.saveSingleFits(syn_linear_ramp,synthName)
+            h0 = fits.PrimaryHDU()
+            h1 = fits.ImageHDU(syn_linear_ramp)
+            h2 = fits.ImageHDU(syn_linear_zero)
+            hl = fits.HDUList([h0,h1,h2])
+            hl.writeto(synthName,overwrite=True)
             print("Ramp of linear synthetic signals saved as {}".format(synthName))
 
         #add synthetic ramp to the dark ramp
@@ -1261,7 +1281,12 @@ class RampSim():
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
             synthName2 = self.params['Output']['file'][0:-5] + '_LinearSyntheticPlusDarkSignalRamp.fits'
-            self.saveSingleFits(lin_outramp,synthName2)
+            #self.saveSingleFits(lin_outramp,synthName2)
+            h0 = fits.PrimaryHDU()
+            h1 = fits.ImageHDU(lin_outramp)
+            h2 = fits.ImageHDU(lin_zeroframe)
+            hl = fits.HDUList([h0,h1,h2])
+            hl.writeto(synthName2,overwrite=True)
             print("Ramp of linear synthetic plus dark signals saved as {}".format(synthName2))
     
         #If requested, insert non-linearity into the summed ramp
@@ -1307,6 +1332,17 @@ class RampSim():
             properramp = lin_outramp
             properzero = lin_zeroframe
 
+
+        #check
+        if self.params['Output']['save_intermediates']:
+            propername = self.params['Output']['file'][0:-5] + '_nonlinearized_combined_ramp.fits'
+            h0 = fits.PrimaryHDU()
+            h1 = fits.ImageHDU(properramp)
+            h2 = fits.ImageHDU(properzero)
+            hl = fits.HDUList([h0,h1,h2])
+            hl.writeto(propername,overwrite=True)
+
+            
         #Look for pixels with crazy values. These are most likely due to the Newton's Method being
         #used to insert the non-linearity failing to converge, probably from bad linearity coefficients
         #or a bad initial guess. Set these pixels' signals to zero
@@ -1345,6 +1381,16 @@ class RampSim():
         if properzero is not None:
             properzero = np.around(properzero)
             properzero = properzero.astype(np.uint16)
+
+        #check
+        if self.params['Output']['save_intermediates']:
+            propername = self.params['Output']['file'][0:-5] + '_nonlinearized_integerized_combined_ramp.fits'
+            h0 = fits.PrimaryHDU()
+            h1 = fits.ImageHDU(properramp)
+            h2 = fits.ImageHDU(properzero)
+            hl = fits.HDUList([h0,h1,h2])
+            hl.writeto(propername,overwrite=True)
+
             
         return properramp,properzero
         
@@ -1683,12 +1729,18 @@ class RampSim():
         pixelsize = self.pixscale[0] / 3600.0
 
         current_time = datetime.datetime.utcnow()
-        ct = Time(current_time)
-        reference_time = datetime.datetime(2000,1,1,0,0,0)
-        delta = current_time-reference_time
-        et = delta.total_seconds()
-        hmjd = 51544.5 + et/86400.0
-        self.dark.meta.date = current_time.strftime('%Y-%m-%dT%H:%M:%S')
+        #ct = Time(current_time)
+        print(self.params['Output']['date_obs'])
+        print(self.params['Output']['time_obs'])
+        start_time_string = self.params['Output']['date_obs'] + 'T' + self.params['Output']['time_obs']
+        ct = Time(start_time_string)
+        #reference_time = datetime.datetime(2000,1,1,0,0,0)
+        #delta = current_time-reference_time
+        #et = delta.total_seconds()
+        #hmjd = 51544.5 + et/86400.0
+        #self.dark.meta.date = current_time.strftime('%Y-%m-%dT%H:%M:%S')
+
+        self.dark.meta.date = start_time_string
         self.dark.meta.telescope = 'JWST'
         
         self.dark.meta.instrument.name = self.params['Inst']['instrument'].upper()
@@ -1702,17 +1754,17 @@ class RampSim():
         self.dark.meta.observation.visit_number = self.params['Output']['visit_number']
         self.dark.meta.observation.program_number = self.params['Output']['program_number']
         self.dark.meta.observation.observation_number = self.params['Output']['observation_number']
-        self.dark.meta.observation.visit_number = self.params['Output']['visit_number']
+        self.dark.meta.observation.observation_label = self.params['Output']['observation_label']
         self.dark.meta.observation.visit_group = self.params['Output']['visit_group']
         self.dark.meta.observation.sequence_id = self.params['Output']['sequence_id']
         self.dark.meta.observation.activity_id =self.params['Output']['activity_id']
         self.dark.meta.observation.exposure_number = self.params['Output']['exposure_number']
     
-        self.dark.meta.program.pi_name = 'UNKNOWN'
-        self.dark.meta.program.title = 'UNKNOWN'
-        self.dark.meta.program.category = 'UNKNOWN'
+        self.dark.meta.program.pi_name = self.params['Output']['PI_Name']
+        self.dark.meta.program.title = self.params['Output']['title']
+        self.dark.meta.program.category = self.params['Output']['Proposal_category']
         self.dark.meta.program.sub_category = 'UNKNOWN'
-        self.dark.meta.program.science_category = 'UNKNOWN'
+        self.dark.meta.program.science_category = self.params['Output']['Science_category']
         self.dark.meta.program.continuation_id = 0
 
         self.dark.meta.target.catalog_name = 'UNKNOWN'
@@ -1732,6 +1784,8 @@ class RampSim():
         self.dark.meta.wcsinfo.v3yangle = self.v3yang
         self.dark.meta.wcsinfo.cdelt1 = self.xsciscale / 3600.
         self.dark.meta.wcsinfo.cdelt2 = self.ysciscale / 3600.
+        #roll_ref = set_telescope_pointing.compute_local_roll(self.params['Telescope']['rotation'],self.ra,self.dec,self.v2_ref,self.v3_ref)
+        self.dark.meta.wcsinfo.roll_ref = self.local_roll
         
         self.dark.meta.target.ra = self.ra
         self.dark.meta.target.dec = self.dec
@@ -1741,24 +1795,25 @@ class RampSim():
         self.dark.meta.pointing.dec_v1 = self.dec
         self.dark.meta.pointing.pa_v3 = self.params['Telescope']['rotation']
 
-        ramptime = self.frametime*(2+self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
+        ramptime = self.frametime*(1+self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
         #Add time for the reset frame....
         rampexptime = self.frametime * (self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
 
         # elapsed time from the end and from the start of the supposid ramp, in seconds
         # put the end of the ramp 1 second before the time the file is written
         # these only go in the fake ramp, not in the signal images....
-        deltatend = datetime.timedelta(0,1.)
-        deltatstart = datetime.timedelta(0,1.+ramptime)
-        tend = current_time - deltatend
-        tstart = current_time - deltatstart
-        self.dark.meta.observation.date = tstart.strftime('%Y-%m-%d')
-        str1 = str(int(tstart.microsecond/1000.))
-        str2 = tstart.strftime('%H:%M:%S.')+str1
-        self.dark.meta.observation.time = str2
-
-        str1 = str(int(tend.microsecond/1000.))
-        str2 = tend.strftime('%H:%M:%S.')+str1
+        #deltatend = datetime.timedelta(0,1.)
+        #deltatstart = datetime.timedelta(0,1.+ramptime)
+        #tend = current_time - deltatend
+        #tstart = current_time - deltatstart
+        #self.dark.meta.observation.date = tstart.strftime('%Y-%m-%d')
+        self.dark.meta.observation.date = self.params['Output']['date_obs']
+        #str1 = str(int(tstart.microsecond/1000.))
+        #str2 = tstart.strftime('%H:%M:%S.')+str1
+        #self.dark.meta.observation.time = str2
+        self.dark.meta.observation.time = self.params['Output']['time_obs']
+        #str1 = str(int(tend.microsecond/1000.))
+        #str2 = tend.strftime('%H:%M:%S.')+str1
 
         #Hmmm. Do we need a file with filter/pupil combos? Or should we rely
         #on the user to enter the correct values in the parameter file?
@@ -1831,7 +1886,7 @@ class RampSim():
         self.dark.meta.exposure.group_time = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
         self.dark.meta.exposure.groupgap = self.params['Readout']['nskip']
 
-        self.dark.meta.exposure.nresets_at_start = 2
+        self.dark.meta.exposure.nresets_at_start = 1
         self.dark.meta.exposure.nresets_between_ints = 1
         self.dark.meta.exposure.integration_time = rampexptime
         self.dark.meta.exposure.exposure_time = rampexptime * self.params['Readout']['nint']
@@ -1925,14 +1980,12 @@ class RampSim():
                 deltaimage[frame-1,:,:] = ramp[frame,:,:] - ramp[frame-1,:,:]
 
             workimage = self.doPoisson(ramp[0,:,:])
-            #if self.runStep['gain']:
-            #    workimage /= gainim
+
             mod_ramp[0,:,:] = workimage
 
             for frame in xrange(1,frames):
                 #add poisson noise 
                 poissonsignal = self.doPoisson(ramp[frame,:,:]) - ramp[frame,:,:]
-                #print('frame {}: input signal {}, dopoisson output {}, poisson signal {}'.format(frame,ramp[frame,200,200],poissonsignal[200,200]+ramp[frame,200,200],poissonsignal[200,200]))
                 mod_ramp[frame,:,:] = mod_ramp[frame-1,:,:] + deltaimage[frame-1,:,:] + poissonsignal
 
             #apply the inverse gain to go from electrons to ADU
@@ -1941,14 +1994,15 @@ class RampSim():
 
             #save the updated zero frame
             if integ == 0:
-                zero = mod_ramp[0,:,:] + crs_only_zero
+                zero = np.copy(mod_ramp[0,:,:]) + crs_only_zero
 
             #save simulated signal ramp, includeing poisson noise (but not CRs)
             #just before rearranging into requested readout pattern
             if self.params['Output']['save_intermediates']:
                 h0 = fits.PrimaryHDU()
                 h1 = fits.ImageHDU(mod_ramp)
-                hlist = fits.HDUList([h0,h1])
+                h2 = fits.ImageHDU(zero)
+                hlist = fits.HDUList([h0,h1,h2])
                 hlist.writeto(self.params['Output']['file'][0:-5] + '_simulatedSources_RAPIDramp.fits',overwrite=True)
                 
                 
@@ -1969,12 +2023,11 @@ class RampSim():
             final_ramp[integ,:,:,:] = rearrangeramp
             final_zero[integ,:,:] = zero
             
-        #print(final_ramp[:,:,400,400])
-        #h0t=fits.PrimaryHDU(final_ramp)
-        #hllt=fits.HDUList([h0t])
-        #hllt.writeto('temp.fits',clobber=True)
-        #print('exiting to check ramp after poisson noise added')
-        #sys.exit()
+        if self.params['Output']['save_intermediates']:
+            h0t=fits.PrimaryHDU(final_ramp)
+            h1t=fits.ImageHDU(final_zero)
+            hllt=fits.HDUList([h0t,h1t])
+            hllt.writeto(self.params['Output']['file'][0:-5]+'_rearranged_source_ramp.fits',overwrite=True)
             
         return final_ramp,final_zero
 
@@ -2614,7 +2667,11 @@ class RampSim():
         #Find the appropriate quantum yield value for the filter
         if self.params['simSignals']['photonyield']:
             try:
-                pym1=self.qydict[self.params['Readout']['filter']] - 1.
+                if self.params['Readout']['pupil'][0].upper() == 'F':
+                    usefilt = 'pupil'
+                else:
+                    usefilt = 'filter'
+                pym1=self.qydict[self.params['Readout'][usefilt]] - 1.
             except:
                 pym1=0.
 
@@ -2641,7 +2698,7 @@ class RampSim():
                         values = np.random.poisson(pym1,newimage[i,j])
                         newimage[i,j] = newimage[i,j] + values.sum()
                     else:
-                        newimage[i,j] = newimage[i,j] * self.qydict[self.params['Readout']['filter']]
+                        newimage[i,j] = newimage[i,j] * self.qydict[self.params['Readout'][usefilt]]
                         fract = newimage[i,j] - int(newimage[i,j])
                         if self.generator2.random() < fract:
                             newimage[i,j] = newimage[i,j] + 1
@@ -3514,7 +3571,9 @@ class RampSim():
         #create a matrix that can be used to translate between V2,V3 and RA,Dec
         #for any pixel.
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
-        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        attitude_matrix = self.getAttitudeMatrix()
+        
       
         #Define the min and max source locations (in pixels) that fall onto the subarray
         #Inlude the effects of a requested grism_direct image, and also keep sources that
@@ -3633,15 +3692,19 @@ class RampSim():
                     scale = 10.**(0.4*(15.0-mag))
 
                     #get the countrate that corresponds to a 15th magnitude star for this filter
-                    cval = self.countvalues[self.params['Readout']['filter']]
+                    if self.params['Readout']['pupil'][0].upper() == 'F':
+                        usefilt = 'pupil'
+                    else:
+                        usefilt = 'filter'
+                    cval = self.countvalues[self.params['Readout'][usefilt]]
 
                     #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
                     if cval == 0:
-                        print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                        print("Countrate value for {} is zero in {}.".format(self.params['Readout'][usefilt],self.parameters['phot_file']))
                         print("Eventually attempting to calculate value using pysynphot.")
                         print("but pysynphot is not present in jwst build 6, so pushing off to later...")
                         sys.exit()
-                        cval = self.findCountrate(self.params['Readout']['filter'])
+                        cval = self.findCountrate(self.params['Readout'][usefilt])
 
                     #translate to counts in single frame at requested array size
                     framecounts = scale*cval*self.frametime
@@ -3724,8 +3787,9 @@ class RampSim():
         #create a matrix that can be used to translate between V2,V3 and RA,Dec
         #for any pixel.
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
-        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
-      
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        attitude_matrix = self.getAttitudeMatrix()
+        
         #Write out the RA and Dec of the field center to the output file
         #Also write out column headers to prepare for source list
         eslist.write("# Field center (degrees): %13.8f %14.8f y axis rotation angle (degrees): %f  image size: %4.4d %4.4d\n" % (self.ra,self.dec,self.params['Telescope']['rotation'],nx,ny))
@@ -3847,15 +3911,19 @@ class RampSim():
                         scale = 10.**(0.4*(15.0-mag))
 
                         #get the countrate that corresponds to a 15th magnitude star for this filter
-                        cval = self.countvalues[self.params['Readout']['filter']]
+                        if self.params['Readout']['pupil'][0].upper() == 'F':
+                            usefilt = 'pupil'
+                        else:
+                            usefilt = 'filter'
+                        cval = self.countvalues[self.params['Readout'][usefilt]]
 
                         #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
                         if cval == 0:
-                            print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                            print("Countrate value for {} is zero in {}.".format(self.params['Readout'][usefilt],self.parameters['phot_file']))
                             print("Eventually attempting to calculate value using pysynphot.")
                             print("but pysynphot is not present in jwst build 6, so pushing off to later...")
                             sys.exit()
-                            cval = self.findCountrate(self.params['Readout']['filter'])
+                            cval = self.findCountrate(self.params['Readout'][usefilt])
 
                         #translate to counts in single frame at requested array size
                         framecounts = scale*cval*self.frametime
@@ -3968,7 +4036,21 @@ class RampSim():
         #create a matrix that can be used to translate between V2,V3 and RA,Dec
         #for any pixel.
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
-        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+
+        #local_roll = set_telescope_pointing.compute_local_roll(self.params['Telescope']["rotation"],self.ra,self.dec,self.refpix_pos['v2'],self.refpix_pos['v3'])
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,local_roll)
+
+        #print('ra,dec (should be degrees)')
+        #print(self.ra,self.dec)
+        #print('v2,v3 (should be arcsec)')
+        #print(self.refpix_pos['v2'],self.refpix_pos['v3'])
+        #print('PA_V3, and local roll angle')
+        #print(self.params['Telescope']["rotation"],local_roll)
+        #stophere
+        
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']['rotation'])
+        attitude_matrix = self.getAttitudeMatrix()
+       
       
         #Define the min and max source locations (in pixels) that fall onto the subarray
         #Inlude the effects of a requested grism_direct image, and also keep sources that
@@ -4077,15 +4159,20 @@ class RampSim():
                     scale = 10.**(0.4*(15.0-mag))
 
                     #get the countrate that corresponds to a 15th magnitude star for this filter
-                    cval = self.countvalues[self.params['Readout']['filter']]
+                    if self.params['Readout']['pupil'][0].upper() == 'F':
+                        usefilt = 'pupil'
+                    else:
+                        usefilt = 'filter'
+                    print("For point sources, using {} to determine countrate.".format(self.params['Readout'][usefilt]))
+                    cval = self.countvalues[self.params['Readout'][usefilt]]
 
                     #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
                     if cval == 0:
-                        print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                        print("Countrate value for {} is zero in {}.".format(self.params['Readout'][usefilt],self.parameters['phot_file']))
                         print("Eventually attempting to calculate value using pysynphot.")
                         print("but pysynphot is not present in jwst build 6, so pushing off to later...")
                         sys.exit()
-                        cval = self.findCountrate(self.params['Readout']['filter'])
+                        cval = self.findCountrate(self.params['Readout'][usefilt])
 
                     #translate to counts in single frame at requested array size
                     framecounts = scale*cval*self.frametime
@@ -4273,7 +4360,7 @@ class RampSim():
         galaxylist = self.filterGalaxyList(glist,pixflag,radflag)
 
         #galaxylist is a table with columns:
-        #'pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','radius','ellipticity','pos_angle','sersic_index','magnitude','countrate_e/s','counts_per_frame_e'
+        #'pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','V2','V3','radius','ellipticity','pos_angle','sersic_index','magnitude','countrate_e/s','counts_per_frame_e'
 
         #final output image
         origyd,origxd = self.dark.data[0,0,:,:].shape
@@ -4298,12 +4385,28 @@ class RampSim():
             deltax = np.int((dims[1] - origxd) / 2)
             deltay = np.int((dims[0] - origyd) / 2)
 
+        #create attitude matrix so we can calculate the North->V3 angle for
+        #each galaxy
+        attitude_matrix = self.getAttitudeMatrix()
+            
         #For each entry, create an image, and place it onto the final output image
         for entry in galaxylist:
-            
-            #first create the galaxy image
-            stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],entry['pos_angle'],entry['counts_per_frame_e'])
 
+            #Get position angle in the correct units. Inputs for each
+            #source are degrees east of north. So we need to find the
+            #angle between north and V3, and then the angle between
+            #V3 and the y-axis on the detector. The former can be found
+            #using rotations.posang(attitude_matrix,v2,v3). The latter
+            #is just V3SciYAngle in the SIAF (I think???)
+            #v3SciYAng is measured in degrees, from V3 towards the Y axis,
+            #measured from V3 towards V2.
+            north_to_east_V3ang = rotations.posangle(attitude_matrix,entry['V2'],entry['V3'])
+            xposang = 0. - (self.v3scixang - north_to_east_V3ang + self.local_roll - entry['pos_angle'] + 90. + self.params['Telescope']['rotation'])
+
+            #first create the galaxy image
+            #stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],entry['pos_angle'],entry['counts_per_frame_e'])
+            stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],xposang*np.pi/180.,entry['counts_per_frame_e'])
+            
             #convolve the galaxy with the NIRCam PSF
             stamp = s1.fftconvolve(stamp,psf,mode='same')
             
@@ -4408,11 +4511,27 @@ class RampSim():
             deltax = np.int((dims[1] - origxd) / 2)
             deltay = np.int((dims[0] - origyd) / 2)
 
+        #create attitude matrix so we can calculate the North->V3 angle for
+        #each galaxy
+        attitude_matrix = self.getAttitudeMatrix()
+            
         #For each entry, create an image, and place it onto the final output image
         for entry in galaxylist:
+
+            #Get position angle in the correct units. Inputs for each
+            #source are degrees east of north. So we need to find the
+            #angle between north and V3, and then the angle between
+            #V3 and the y-axis on the detector. The former can be found
+            #using rotations.posang(attitude_matrix,v2,v3). The latter
+            #is just V3SciYAngle in the SIAF (I think???)
+            #v3SciYAng is measured in degrees, from V3 towards the Y axis,
+            #measured from V3 towards V2.
+            north_to_east_V3ang = rotations.posangle(attitude_matrix,entry['V2'],entry['V3'])
+            #xposang = (0-self.v3scixang) - (north_to_east_V3ang - entry['pos_angle'])            
+            xposang = 0. - (self.v3scixang - north_to_east_V3ang + self.local_roll - entry['pos_angle'] + 90. + self.params['Telescope']['rotation'])
             
             #first create the galaxy image
-            stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],entry['pos_angle'],entry['counts_per_frame_e'])
+            stamp = self.create_galaxy(entry['radius'],entry['ellipticity'],entry['sersic_index'],xposang*np.pi/180.,entry['counts_per_frame_e'])
 
             #convolve the galaxy with the NIRCam PSF
             stamp = s1.fftconvolve(stamp,psf,mode='same')
@@ -4545,7 +4664,7 @@ class RampSim():
         #given a list of galaxies (location, size, orientation, magnitude)
         #keep only those which will fall fully or partially on the output array
         
-        filteredList = Table(names=('pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','radius','ellipticity','pos_angle','sersic_index','magnitude','countrate_e/s','counts_per_frame_e'),dtype=('f','f','S14','S14','f','f','f','f','f','f','f','f','f'))
+        filteredList = Table(names=('pixelx','pixely','RA','Dec','RA_degrees','Dec_degrees','V2','V3','radius','ellipticity','pos_angle','sersic_index','magnitude','countrate_e/s','counts_per_frame_e'),dtype=('f','f','S14','S14','f','f','f','f','f','f','f','f','f','f','f'))
 
         #each entry in galaxylist is:
         #x_or_RA  y_or_Dec  radius  ellipticity  pos_angle  sersic_index  magnitude
@@ -4587,8 +4706,9 @@ class RampSim():
         #create a matrix that can be used to translate between V2,V3 and RA,Dec
         #for any pixel
         #v2,v3 need to be in arcsec, and RA, Dec, and roll all need to be in degrees
-        attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
-
+        #attitude_matrix = rotations.attitude(self.refpix_pos['v2'],self.refpix_pos['v3'],self.ra,self.dec,self.params['Telescope']["rotation"])
+        attitude_matrix = self.getAttitudeMatrix()
+        
         #Loop over galaxy sources
         for source in galaxylist:
 
@@ -4654,7 +4774,8 @@ class RampSim():
             #only keep the source if the peak will fall within the subarray
             if pixely > outminy and pixely < outmaxy and pixelx > outminx and pixelx < outmaxx:
 
-                entry = [pixelx,pixely,ra_str,dec_str,ra,dec,source['radius'],source['ellipticity'],source['pos_angle'],source['sersic_index']]
+                pixelv2,pixelv3 = rotations.getv2v3(attitude_matrix,ra,dec)
+                entry = [pixelx,pixely,ra_str,dec_str,ra,dec,pixelv2,pixelv3,source['radius'],source['ellipticity'],source['pos_angle'],source['sersic_index']]
 
                 #Now look at the input magnitude of the point source
                 #append the mag and pixel position to the list of ra,dec
@@ -4665,15 +4786,19 @@ class RampSim():
                 scale = 10.**(0.4*(15.0-mag))
 
                 #get the countrate that corresponds to a 15th magnitude star for this filter
-                cval = self.countvalues[self.params['Readout']['filter']]
+                if self.params['Readout']['pupil'][0].upper() == 'F':
+                    usefilt = 'pupil'
+                else:
+                    usefilt = 'filter'
+                cval = self.countvalues[self.params['Readout'][usefilt]]
 
                 #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
                 if cval == 0:
-                    print("Countrate value for {} is zero in {}.".format(self.params['Readout']['filter'],self.parameters['phot_file']))
+                    print("Countrate value for {} is zero in {}.".format(self.params['Readout'][usefilt],self.parameters['phot_file']))
                     print("Eventually attempting to calculate value using pysynphot.")
                     print("but pysynphot is not present in jwst build 6, so pushing off to later...")
                     sys.exit()
-                    cval = self.findCountrate(self.params['Readout']['filter'])
+                    cval = self.findCountrate(self.params['Readout'][usefilt])
 
                 #translate to counts in single frame at requested array size
                 framecounts = scale*cval*self.frametime
@@ -4704,7 +4829,6 @@ class RampSim():
 
         #create the grid of pixels
         meshmax = np.min([np.int(self.ffsize*self.coord_adjust['y']),radius*100.])
-        #meshmax = np.min([self.ffsize,radius*100.])
         x,y = np.meshgrid(np.arange(meshmax), np.arange(meshmax))
 
         #center the galaxy in the array
@@ -4712,6 +4836,7 @@ class RampSim():
         yc = meshmax/2
         
         #create model
+        print('posang is {}'.format(posang))
         mod = Sersic2D(amplitude = 1,r_eff = radius, n=sersic, x_0=xc, y_0=yc, ellip=ellipticity, theta=posang)
 
         #create instance of model
@@ -4820,6 +4945,9 @@ class RampSim():
             #Finally, undistorted distances to distorted pixel values
             deltapixelx, deltapixely, err, iter = polynomial.invert(self.x_sci2idl,self.y_sci2idl,xidl,yidl,5)
 
+            pixelx = deltapixelx + self.refpix_pos['x']
+            pixely = deltapixely + self.refpix_pos['y']
+
         else:
             #If the full set of distortion coefficients are not provided,
             #then we fall back to the coordinate transform provided by the
@@ -4829,10 +4957,9 @@ class RampSim():
             #corners of the detector.
     
             #Now go backwards from V2,V3 to distorted pixels
-            deltapixelx,deltapixely = coord_transform.inverse(pixelv2-self.refpix_pos['v2'],pixelv3-self.refpix_pos['v3'])
-
-        pixelx = deltapixelx + self.refpix_pos['x']
-        pixely = deltapixely + self.refpix_pos['y']
+            #deltapixelx,deltapixely = coord_transform.inverse(pixelv2-self.refpix_pos['v2'],pixelv3-self.refpix_pos['v3'])
+            pixelx,pixely = coord_transform.inverse(pixelv2,pixelv3)
+            
 
         return pixelx,pixely
 
@@ -4869,10 +4996,11 @@ class RampSim():
         #if self.runStep['astrometric']:
         if coord_transform is not None:
             #Transform distorted pixels to V2,V3
-            deltav2,deltav3 = coord_transform(pixelx-self.refpix_pos['x'],pixely-self.refpix_pos['y'])
-            pixelv2 = deltav2 + self.refpix_pos['v2']
-            pixelv3 = deltav3 + self.refpix_pos['v3']
-
+            #deltav2,deltav3 = coord_transform(pixelx-self.refpix_pos['x'],pixely-self.refpix_pos['y'])
+            #pixelv2 = deltav2 + self.refpix_pos['v2']
+            #pixelv3 = deltav3 + self.refpix_pos['v3']
+            pixelv2,pixelv3 = coord_transform(pixelx,pixely)
+            
             #Now translate V2,V3 to RA,Dec
             ra,dec = rotations.pointing(attitude_matrix,pixelv2,pixelv3)
 
@@ -5033,8 +5161,12 @@ class RampSim():
 
         #make sure the requested filter is allowed. For imaging, all filters are allowed.
         #In the future, other modes will be more restrictive
-        if self.params['Readout']['filter'] not in self.qydict:
-            print("WARNING: requested filter {} is not in the list of possible filters.".format(self.params['Readout']['filter']))
+        if self.params['Readout']['pupil'][0].upper() == 'F':
+            usefilt = 'pupil'
+        else:
+            usefilt = 'filter'
+        if self.params['Readout'][usefilt] not in self.qydict:
+            print("WARNING: requested filter {} is not in the list of possible filters.".format(self.params['Readout'][usefilt]))
             sys.exit()
 
 
@@ -5064,12 +5196,12 @@ class RampSim():
             wfegroup = self.params['simSignals']['psfwfegroup']
             basename = self.params['simSignals']['psfbasename'] + '_'
             if wfe == 0:
-                psfname=basename+self.params['simSignals']["filter"].lower()+'_zero'
-                self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['simSignals']['filter'].lower()+'/zero/'
+                psfname=basename+self.params['simSignals'][usefilt].lower()+'_zero'
+                self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['simSignals'][usefilt].lower()+'/zero/'
             else:
                 if wfe in [115,123,136,155] and wfegroup > -1 and wfegroup < 10:
-                    psfname=basename+self.params['Readout']['filter'].lower()+"_"+str(wfe)+"_"+str(wfegroup)
-                    self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['Readout']['filter'].lower()+'/'+str(wfe)+'/'
+                    psfname=basename+self.params['Readout'][usefilt].lower()+"_"+str(wfe)+"_"+str(wfegroup)
+                    self.params['simSignals']['psfpath']=self.params['simSignals']['psfpath']+self.params['Readout'][usefilt].lower()+'/'+str(wfe)+'/'
                 else:
                     print("WARNING: wfe value of {} not allowed. Library does not exist.".format(wfe))
                     sys.exit()
@@ -5176,11 +5308,20 @@ class RampSim():
             #ap_name = inst_abbrev[self.params['Inst']['instrument'].lower()] + self.params['Inst']['detector'].upper() + '_' + self.params['Readout']['array_name'].upper()
             ap_name = self.params['Readout']['array_name']
 
-            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref,self.parity,self.v3yang,self.xsciscale,self.ysciscale = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
+            self.x_sci2idl,self.y_sci2idl,self.v2_ref,self.v3_ref,self.parity,self.v3yang,self.xsciscale,self.ysciscale,self.v3scixang = self.getDistortionCoefficients(distortionTable,'science','ideal',ap_name)
             
             #Generate the coordinate transform for V2,V3 to 'ideal'
-            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
+            siaf = ascii.read(self.params['Reffiles']['distortion_coeffs'],header_start=1)
+            match = siaf['AperName'] == ap_name
+            if np.any(match) == False:
+                print("Aperture name {} not found in input CSV file.".
+                      format(aperture))
+                sys.exit()
 
+            siaf_row = siaf[match]
+
+            #self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
+            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(siaf_row,ap_name,to_system='ideal')
             
         #convert the input RA and Dec of the pointing position into floats
         #check to see if the inputs are in decimal units or hh:mm:ss strings
@@ -5258,8 +5399,8 @@ class RampSim():
 
         #check the output metadata, including visit and observation numbers, obs_id, etc
 
-        kwchecks = ['program_number','observation_number','visit_number','visit_group',
-                    'obs_id','visit_id','sequence_id','activity_id','exposure_number']
+        kwchecks = ['program_number','visit_number','visit_group',
+                    'sequence_id','activity_id','exposure_number','observation_number','obs_id','visit_id']
         for quality in kwchecks:
             try:
                 self.params['Output'][quality] = str(self.params['Output'][quality])
@@ -5301,12 +5442,13 @@ class RampSim():
         #Get parity and V3 Y angle info 
         parity = row['VIdlParity'].data[0]
         yang = row['V3IdlYAngle'].data[0]
-
+        v3scixang = row['V3SciXAngle'].data[0]
+        
         #Get pixel scale info - not used but needs to be in output
         xsciscale = row['XSciScale'].data[0]
         ysciscale = row['YSciScale'].data[0]
         
-        return x_coeffs,y_coeffs,v2ref,v3ref,parity,yang,xsciscale,ysciscale
+        return x_coeffs,y_coeffs,v2ref,v3ref,parity,yang,xsciscale,ysciscale,v3scixang
                 
 
     def getCRrate(self):
@@ -5484,6 +5626,7 @@ class RampSim():
             f.write('  nframe: 1        #Number of frames per group\n')
             f.write('  nskip: 0         #Number of skipped frames between groups\n')
             f.write('  ngroup: 5              #Number of groups in integration\n')
+            f.write('  nint: 1          #Number of integrations per exposure\n')
             f.write('  namp: 4                               #Number of amplifiers used in readout (4 for full frame, 1 for subarray)\n')
             f.write('  array_name: NRCA1_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below\n')
             f.write('  subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format\n')
