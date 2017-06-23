@@ -50,6 +50,253 @@ class AptInput:
         self.siaf = ''
         
 
+    def read_xml(self,infile):
+        #read in APT xml file. WFSS and/or direct exposures can be
+        #in the file
+
+        #open file, get tree
+        with open(infile) as f:
+            tree = etree.parse(f)
+        namespaces = tree.getroot().nsmap.copy()
+        namespaces['apt'] = namespaces[None]
+        del namespaces[None]
+
+        #creat dictionary to hold all relevant exposure info
+        dict = {}
+        dict['PI_Name'] = []
+        dict['ProposalID'] = []
+        dict['Title'] = []
+        dict['Proposal_category'] = []
+        dict['Science_category'] = []
+        dict['Mode'] = []
+        dict['Module'] = []
+        dict['Subarray'] = []
+        dict['PrimaryDitherType'] = []
+        dict['PrimaryDithers'] = []
+        dict['SubpixelDitherType'] = []
+        dict['SubpixelPositions'] = []
+        dict['ShortFilter'] = []
+        dict['LongFilter'] = []
+        dict['ReadoutPattern'] = []
+        dict['Groups'] = []
+        dict['Integrations'] = []
+        dict['ShortPupil'] = []
+        dict['LongPupil'] = []
+        dict['Grism'] = []
+        dict['CoordinatedParallel'] = []
+
+        #get high level information: proposal info
+        #P.I. Name, etc
+        propid_default = 42424
+        proptitle_default = 'Looking for my towel'
+        scicat_default = 'Planets and Planet Formation'
+        piname_default = 'D.N. Adams'
+
+        apt = '{http://www.stsci.edu/JWST/APT}'
+        propinfo = tree.find(apt+'ProposalInformation')
+        try:
+            proptitle = propinfo.find(apt+'Title').text
+        except:
+            proptitle = proptitle_default
+        try:
+            propid = propinfo.find(apt+'ProposalID').text
+        except:
+            propid = propid_default
+        propcat = 'GO'
+        try:
+            scicat = propinfo.find(apt+'ScientificCategory').text
+        except:
+            scicat = scicat_default
+        try:
+            piinfo = propinfo.find(apt+'PrincipalInvestigator')
+            piadd = piinfo.find(apt+'InvestigatorAddress')
+            firstname = piadd.find(apt+'FirstName').text
+            lastname = piadd.find(apt+'LastName').text
+            piname = firstname + ' ' + lastname
+        except:
+            piname = piname_default
+        
+        #more streamlined version with valid (i belive) assumptions
+        #about format of xml file:
+        #within an observation: only 1 instrument, 1 template, 1 nci:NircamImaging or 1 ncwfss:NircamWfss
+        obspath = "//apt:Observation"
+        obsresults = tree.xpath(obspath, namespaces=namespaces)
+        obsgrouppath = "//apt:ObservationGroup"
+        obsgroupresults = tree.xpath(obsgrouppath,namespaces=namespaces)
+
+        apt = '{http://www.stsci.edu/JWST/APT}'
+        nci = "{http://www.stsci.edu/JWST/APT/Template/NircamImaging}"
+        ncwfss = "{http://www.stsci.edu/JWST/APT/Template/NircamWfss}"
+        for obs in obsresults:
+            #for elem in obs:
+            #    print(elem.tag,elem.text)
+            numbele = obs.find(apt+'Number')
+            number = numbele.text
+            labelele = obs.find(apt+'Label')
+            if labelele is not None:
+                label = labelele.text
+            else:
+                label = 'None'
+            targele = obs.find(apt+'TargetID')
+            targsplit = targele.text.split()
+            target = ''
+            for i in range(1,len(targsplit)):
+                target += targsplit[i]
+            instele = obs.find(apt+'Instrument')
+
+            if instele.text == 'NIRCAM':
+                template = obs.find(apt+'Template')
+                coordparallel = obs.find(apt+'CoordinatedParallel').text
+                imaging_temp = template.find(nci+'NircamImaging')
+                if imaging_temp is not None:
+                    typeflag = 'Imaging'
+                    grismval = 'N/A'
+                    short_pupil = 'CLEAR'
+                    mod = imaging_temp.find(nci+'Module').text
+                    subarr = imaging_temp.find(nci+'Subarray').text
+                    pdithtype = imaging_temp.find(nci+'PrimaryDitherType').text
+                    pdither = imaging_temp.find(nci+'PrimaryDithers').text
+                    sdithtype = imaging_temp.find(nci+'SubpixelDitherType').text
+                    sdither = imaging_temp.find(nci+'SubpixelPositions').text
+                    filtele = imaging_temp.find(nci+'Filters') 
+                    filtconfigeles = filtele.findall(nci+'FilterConfig')
+                    for fcele in filtconfigeles:
+                        sfilt = fcele.find(nci+'ShortFilter').text
+                        lfilt = fcele.find(nci+'LongFilter').text
+                        rpatt = fcele.find(nci+'ReadoutPattern').text
+                        grps = fcele.find(nci+'Groups').text
+                        ints = fcele.find(nci+'Integrations').text
+                
+                        #separate pupil and filter in case of filter that is 
+                        #mounted in the pupil wheel
+                        if '+' in sfilt:
+                            p = sfilt.find('+')
+                            short_pupil = sfilt[0:p]
+                            sfilt = sfilt[p+1:]
+                        else:
+                            short_pupil = 'CLEAR'
+                    
+                        if '+' in lfilt:
+                            p = lfilt.find('+')
+                            long_pupil = lfilt[0:p]
+                            lfilt = lfilt[p+1:]
+                        else:
+                            long_pupil = 'CLEAR'
+                
+                        tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismval,coordparallel)
+                        dict = self.add_exposure(dict,tup_to_add)                
+                
+                wfss_temp = template.find(ncwfss+'NircamWfss')
+                if wfss_temp is not None:
+                    mod = wfss_temp.find(ncwfss+'Module').text
+                    subarr = wfss_temp.find(ncwfss+'Subarray').text
+                    grismval = wfss_temp.find(ncwfss+'Grism').text
+                    if grismval == 'BOTH':
+                        grismval = ['GRISMR','GRISMC']
+                    else:
+                        grismval = [grismval]
+                    pdithtype = wfss_temp.find(ncwfss+'PrimaryDitherType').text
+                    pdither = wfss_temp.find(ncwfss+'PrimaryDithers').text
+                    sdither = wfss_temp.find(ncwfss+'SubpixelPositions').text
+                    sdithtype = wfss_temp.find(ncwfss+'SubpixelPositions').text
+                    explist = wfss_temp.find(ncwfss+'ExposureList')
+                    expseqs = explist.findall(ncwfss+'ExposureSequences')
+            
+                    #if BOTH was specified for the grism, then we need to repeat the
+                    #sequence of grism/direct/grism/direct/outoffield for each grism
+                    for gnum in range(len(grismval)):
+                        for expseq in expseqs:
+                            #sequence = grism,direct,grism,direct,outoffield
+                            #if grism == both, sequence is done for grismr, then repeated for grismc
+                            grismvalue = grismval[gnum]
+                            #need to switch the order of the grism and direct exposures
+                            #in order for them to be chronological
+                            grismexp = expseq.find(ncwfss+'GrismExposure')
+                            typeflag = 'WFSS'
+                            sfilt = grismexp.find(ncwfss+'ShortFilter').text
+                            lfilt = grismexp.find(ncwfss+'LongFilter').text
+                            rpatt = grismexp.find(ncwfss+'ReadoutPattern').text
+                            groups = grismexp.find(ncwfss+'Groups').text
+                            integrations = grismexp.find(ncwfss+'Integrations').text
+
+                            #separate pupil and filter in case of filter that is 
+                            #mounted in the pupil wheel
+                            if '+' in sfilt:
+                                p = sfilt.find('+')
+                                short_pupil = sfilt[0:p]
+                                sfilt = sfilt[p+1:]
+                            else:
+                                short_pupil = 'CLEAR'
+                    
+                            long_pupil = grismvalue
+                            tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismvalue,coordparallel)
+                            dict = self.add_exposure(dict,tup_to_add)
+
+                            directexp = expseq.find(ncwfss+'DiExposure')
+                            typeflag = 'Imaging'
+                            pdither = '1' #direct image has no dithers
+                            sdither = '1' #direct image has no dithers
+                            sdithtype = '1' #direct image has no dithers
+                            grismvalue = 'N/A'
+                            sfilt = directexp.find(ncwfss+'ShortFilter').text
+                            lfilt = directexp.find(ncwfss+'LongFilter').text
+                            rpatt = directexp.find(ncwfss+'ReadoutPattern').text
+                            grps = directexp.find(ncwfss+'Groups').text
+                            ints = directexp.find(ncwfss+'Integrations').text
+                
+                            #separate pupil and filter in case of filter that is 
+                            #mounted in the pupil wheel
+                            if '+' in sfilt:
+                                p = sfilt.find('+')
+                                short_pupil = sfilt[0:p]
+                                sfilt = sfilt[p+1:]
+                            else:
+                                short_pupil = 'CLEAR'
+                    
+                            if '+' in lfilt:
+                                p = lfilt.find('+')
+                                long_pupil = lfilt[0:p]
+                                lfilt = lfilt[p+1:]
+                            else:
+                                long_pupil = 'CLEAR'
+            
+                            direct_tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismvalue,coordparallel)
+                            dict = self.add_exposure(dict,direct_tup_to_add)
+
+                        #Now we need to make the out of field exposures. We can just duplicate the 
+                        #entries for the direct images taken immediately prior. BUT, will there ever
+                        #be a case where there is no preceding direct image?
+                        #Need to add 2 out of field exposures
+                        dict = self.add_exposure(dict,direct_tup_to_add)
+                        dict = self.add_exposure(dict,direct_tup_to_add)
+        return dict
+
+            
+    def add_exposure(self,dictionary,tup):
+        #add an exposure to the dictionary 
+        dictionary['PI_Name'].append(tup[0])
+        dictionary['ProposalID'].append(tup[1])
+        dictionary['Title'].append(tup[2])
+        dictionary['Proposal_category'].append(tup[3])
+        dictionary['Science_category'].append(tup[4])
+        dictionary['Mode'].append(tup[5])
+        dictionary['Module'].append(tup[6])
+        dictionary['Subarray'].append(tup[7])
+        dictionary['PrimaryDitherType'].append(tup[8])
+        dictionary['PrimaryDithers'].append(tup[9])
+        dictionary['SubpixelDitherType'].append(tup[10])
+        dictionary['SubpixelPositions'].append(tup[11])
+        dictionary['ShortFilter'].append(tup[12])
+        dictionary['LongFilter'].append(tup[13])
+        dictionary['ReadoutPattern'].append(tup[14])
+        dictionary['Groups'].append(tup[15])
+        dictionary['Integrations'].append(tup[16])
+        dictionary['ShortPupil'].append(tup[17])
+        dictionary['LongPupil'].append(tup[18])
+        dictionary['Grism'].append(tup[19])
+        dictionary['CoordinatedParallel'].append(tup[20])
+        return dictionary
+        
     def read_wfss_xml(self,infile):
         #read APT xml file for WFSS mode observations
         #first, set up variables 
@@ -410,6 +657,10 @@ class AptInput:
         finalList['Proposal_category'] = [prop_category]*len(finalList['Module'])
         finalList['Science_category'] = [science_category]*len(finalList['Module'])
 
+
+        #for code checking
+        ascii.write(Table(finalList), 'test_imaging.csv', format='csv', overwrite=True)
+        
         return finalList
 
 
@@ -647,26 +898,29 @@ class AptInput:
         
     def create_input_table(self):
         #read in xml file. Try reading as imaging mode first.
-        tab_im = self.read_imaging_xml(self.input_xml)
+        #tab_im = self.read_imaging_xml(self.input_xml)
 
         #try reading as WFSS
         #if len(tab[tab.keys()[0]]) == 0:
-        tab_wfss = self.read_wfss_xml(self.input_xml)
+        #tab_wfss = self.read_wfss_xml(self.input_xml)
 
-        if len(tab_im['Mode']) == 0:
-            if len(tab_wfss['Mode']) > 0:
-                tab = tab_wfss
-            else:
-                print('WARNING: neither imaging nor WFSS observations found! Quitting.')
-                sys.exit()
-        else:
-            if len(tab_wfss['Mode']) > 0:
-                tab = {}
-                for key in tab_im:
-                    tab[key] = tab_im[key] + tab_wfss[key]
-            else:
-                tab = tab_im
+        #if len(tab_im['Mode']) == 0:
+        #    if len(tab_wfss['Mode']) > 0:
+        #        tab = tab_wfss
+        #    else:
+        #        print('WARNING: neither imaging nor WFSS observations found! Quitting.')
+        #        sys.exit()
+        #else:
+        #    if len(tab_wfss['Mode']) > 0:
+        #        tab = {}
+        #        for key in tab_im:
+        #            tab[key] = tab_im[key] + tab_wfss[key]
+        #    else:
+        #        tab = tab_im
 
+        #read in xml file using the new function
+        tab = self.read_xml(self.input_xml)
+        
         #expand the dictionary for multiple dithers. Expand such that there
         #is one entry in each list for each exposure, rather than one entry
         #for each set of dithers
