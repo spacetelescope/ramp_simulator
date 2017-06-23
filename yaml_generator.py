@@ -44,8 +44,14 @@ sequence_id - APT
 activity_id - APT
 exposure_number - APT
 
+seq_id changes based on coordinatedparallel entry 1 for prime 2-5 for parallel
+
+template - observation template  "NIRCam Imaging" for all? WFSS is not listed as an entry in the keyword dictionary
+https://mast.stsci.edu/portal/Mashup/Clients/jwkeywords/index.html
 
 '''
+
+
 
 import sys,os
 import argparse
@@ -163,7 +169,15 @@ class SimInput:
         #level-3 associated keywords that are not present in APT file.
         #not quite sure how to populate these
         self.info['visit_group'] = ['01'] * len(self.info['Mode'])
-        self.info['sequence_id'] = ['1'] * len(self.info['Mode'])
+        #self.info['sequence_id'] = ['1'] * len(self.info['Mode'])
+        seq = []
+        for par in self.info['CoordinatedParallel']:
+            if par.lower() == 'true':
+                seq.append('2')
+            if par.lower() == 'false':
+                seq.append('1')
+        self.info['sequence_id'] = seq
+        self.info['obs_template'] = ['NIRCam Imaging'] * len(self.info['Mode'])
         
         #write out the updated table, including yaml filenames
         #start times, and reference files
@@ -569,6 +583,7 @@ class SimInput:
             f.write("  obs_id: '{}'   #Observation ID number\n".format(input['observation_id']))
             f.write("  date_obs: '{}'  #Date of observation\n".format(input['date_obs']))
             f.write("  time_obs: '{}'  #Time of observation\n".format(input['time_obs']))
+            f.write("  obs_template: '{}'  #Observation template\n".format(input['obs_template']))
             #f.write('  expstart: {}  #MJD exposure start time\n'.format(input['expstart']))
         print("Output file written to {}".format(input['yamlfile']))
 
