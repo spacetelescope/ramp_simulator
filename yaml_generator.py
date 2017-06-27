@@ -190,6 +190,16 @@ class SimInput:
             file_dict = {}
             for key in self.info:
                 file_dict[key] = self.info[key][i]
+
+            #break dither number into numbers for primary
+            #and subpixel dithers
+            tot_dith = np.int(file_dict['dither'])
+            primarytot = np.int(file_dict['PrimaryDithers'])
+            subpixtot = np.int(file_dict['SubpixelPositions'])
+            primary_dither = np.ceil(tot_dith/primarytot)
+            subpix_dither = tot_dith - primarytot*(primary_dither-1)
+            file_dict['primary_dither_num'] = primary_dither
+            file_dict['subpix_dither_num'] = subpix_dither
             
             self.write_yaml(file_dict)
 
@@ -460,7 +470,16 @@ class SimInput:
             filtkey = 'LongFilter'
             pupilkey = 'LongPupil'
 
-        with open(input['yamlfile'],'w') as f:
+        if self.use_nonstsci_names:
+            outtf = False
+            outfile = input['outputfits']
+            yamlout = input['yamlfile']
+        else:
+            outtf = True
+            outfile = input['observation_id'] + '_uncal.fits'
+            yamlout = input['observation_id'] + '.yaml'
+            
+        with open(yamlout,'w') as f:
             f.write('Inst:\n')
             f.write('  instrument: {}          #Instrument name\n'.format('NIRCam'))
             f.write('  mode: {}                #Observation mode (e.g. imaging, WFSS, moving_target)\n'.format(input['Mode']))
@@ -560,7 +579,8 @@ class SimInput:
             f.write('  linear_configfile: linearity.cfg\n')
             f.write('\n')
             f.write('Output:\n')
-            f.write('  file: {}   #Output filename\n'.format(input['outputfits']))
+            #f.write('  use_stsci_output_name: {} #Output filename should follow STScI naming conventions (True/False)\n'.format(outtf))
+            f.write('  file: {}   #Output filename\n'.format(outfile))
             f.write('  format: DMS          #Output file format Options: DMS, SSR(not yet implemented)\n')
             f.write('  save_intermediates: False   #Save intermediate products separately (point source image, etc)\n')
             f.write('  grism_source_image: {}   #grism\n'.format(input['grism_source_image']))
@@ -573,7 +593,7 @@ class SimInput:
             f.write('  Proposal_category: {}  #Proposal category\n'.format(input['Proposal_category']))
             f.write('  Science_category: {}  #Science category\n'.format(input['Science_category']))
             f.write("  observation_number: '{}'    #Observation Number\n".format(input['obs_num']))
-            f.write('  observation_label: {}    #User-generated observation Label\n'.format(input['obs_label']))
+            f.write('  observation_label: {}    #User-generated observation Label\n'.format(input['obs_label'].strip()))
             f.write("  visit_number: '{}'    #Visit Number\n".format(input['visit_num']))
             f.write("  visit_group: '{}'    #Visit Group\n".format(input['visit_group']))
             f.write("  visit_id: '{}'    #Visit ID\n".format(input['visit_id']))
@@ -584,8 +604,15 @@ class SimInput:
             f.write("  date_obs: '{}'  #Date of observation\n".format(input['date_obs']))
             f.write("  time_obs: '{}'  #Time of observation\n".format(input['time_obs']))
             f.write("  obs_template: '{}'  #Observation template\n".format(input['obs_template']))
-            #f.write('  expstart: {}  #MJD exposure start time\n'.format(input['expstart']))
-        print("Output file written to {}".format(input['yamlfile']))
+            f.write("  primary_dither_type: {}  #Primary dither pattern name\n".format(input['PrimaryDitherType']))
+            f.write("  total_primary_dither_positions: {}  #Total number of primary dither positions\n".format(input['PrimaryDithers']))
+            f.write("  primary_dither_position: {}  #Primary dither position number\n".format(np.int(input['primary_dither_num'])))
+            f.write("  subpix_dither_type: {}  #Subpixel dither pattern name\n".format(input['SubpixelDitherType']))
+            f.write("  total_subpix_dither_positions: {}  #Total number of subpixel dither positions\n".format(input['SubpixelPositions']))
+            f.write("  subpix_dither_position: {}  #Subpixel dither position number\n".format(np.int(input['subpix_dither_num'])))
+            f.write("  xoffset: {}  #Dither pointing offset in x (arcsec)\n".format(input['idlx']))
+            f.write("  yoffset: {}  #Dither pointing offset in y (arcsec)\n".format(input['idly']))            
+        print("Output file written to {}".format(yamlout))
 
         
     def reffile_setup(self):
@@ -680,6 +707,7 @@ class SimInput:
         parser.add_argument("--siaf",help='CSV version of SIAF. Needed only in conjunction with input_xml+pointing.')
         parser.add_argument("--output_dir",help='Directory into which the yaml files are output',default='./')
         parser.add_argument("--table_file",help='Ascii table containing observation info. Use this or xml+pointing+siaf files.')
+        parser.add_argument("--use_nonstsci_names",help="Use STScI naming convention for output files",action='store_true')
         parser.add_argument("--subarray_def_file",help="Ascii file containing subarray definitions",default=None)
         parser.add_argument("--readpatt_def_file",help='Ascii file containing readout pattern definitions',default=None)
         parser.add_argument("--point_source",help='point source catalog file',nargs='*',default=[None])
