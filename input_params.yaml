@@ -1,6 +1,6 @@
 Inst:
   instrument: NIRCam          #Instrument name
-  mode: imaging               #Observation mode (e.g. imaging, WFSS, moving_target)
+  mode: Imaging                #Observation mode (e.g. imaging, WFSS, moving_target)
   nresetlines: 512                        #eventially use dictionary w/in code to look this up
 
 Readout:
@@ -8,36 +8,36 @@ Readout:
   nframe: 1        #Number of frames per group
   nskip: 0         #Number of skipped frames between groups
   ngroup: 3              #Number of groups in integration
-  nint: 1          #Number of integrations in output exposure
-  namp: 4                               #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
-  array_name: NRCA1_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
+  nint: 1          #Number of integrations per exposure
+  namp: 1         #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
+  array_name: NRCB5_SUB640    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
   subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format
-  filter: F115W                 #Filter of simulated data (F090W, F322W2, etc)
-  pupil: CLEAR                   #Pupil element for simulated data (CLEAR, GRISMC, etc)
+  filter: F300M       #Filter of simulated data (F090W, F322W2, etc)
+  pupil: CLEAR        #Pupil element for simulated data (CLEAR, GRISMC, etc)
 
 Reffiles:                                 #Set to None or leave blank if you wish to skip that step
-  dark: /ifs/jwst/wit/witserv/data4/nrc/hilbert/superbias/cv3/A1/NRCNRCA1-DARK-60091434481_1_481_SE_2016-01-09T15h50m45_uncal.fits               #Dark current integration used as the base
+  dark: /ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/darks/BLONG/NRCNRCBLONG-DARK-53560503591_1_490_SE_2015-12-22T05h34m25_uncal.fits   #Dark current integration used as the base
   hotpixmask: None                        #Hot pixel mask to go with the dark integration. If none, the script will find hot pixels. Fits file. Ones are hot. Zeros not.
-  superbias: /ifs/jwst/wit/witserv/data4/nrc/hilbert/superbias/cv3/A1/A1_superbias_from_list_of_biasfiles.list.fits     #Superbias file. Set to None or leave blank if not using
-  subarray_defs: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates
-  readpattdefs: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/nircam_read_pattern_definitions.list           #File that contains a list of all possible readout pattern names and associated NFRAME/NSKIP values
-  linearity: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/linearity/NRCA1_17004_LinearityCoeff_ADU0_2016-05-14_ssblinearity_v2_DMSorient.fits     #linearity correction coefficients
-  saturation: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/welldepth/NRCA1_17004_WellDepthADU_2016-03-10_ssbsaturation_DMSorient.fits      #well depth reference files
-  gain: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/gain/NRCA1_17004_Gain_ISIMCV3_2016-01-23_ssbgain_DMSorient.fits                    #Gain map
-  phot: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/nircam_mag15_countrates.list                  #File with list of all filters and associated quantum yield values and countrates for mag 15 star
+  superbias: /ifs/jwst/wit/witserv/data4/nrc/hilbert/superbias/cv3/deliver_to_CRDS/NRCB5_superbias_from_list_of_biasfiles.list.fits     #Superbias file. Set to None or leave blank if not using
+  subarray_defs: NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates
+  readpattdefs: nircam_read_pattern_definitions.list           #File that contains a list of all possible readout pattern names and associated NFRAME/NSKIP values
+  linearity: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/linearity/NRCBLONG_17161_LinearityCoeff_ADU0_2016-05-22_ssblinearity_v2_DMSorient.fits    #linearity correction coefficients
+  saturation: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/welldepth/NRCB5_17161_WellDepthADU_2016-03-10_ssbsaturation_wfact_DMSorient.fits    #well depth reference files
+  gain: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/gain/NRCB5_17161_Gain_ISIMCV3_2016-02-25_ssbgain_DMSorient.fits #Gain map
+  phot: nircam_mag15_countrates.list  #File with list of all filters and associated quantum yield values and countrates for mag 15 star
   pixelflat: None 
   illumflat: None                               #Illumination flat field file
-  astrometric: /ifs/jwst/wit/witserv/data4/nrc/hilbert/distortion_reference_file/jwreftools/nircam/NRCA1_FULL_distortion.asdf #Astrometruc distortion file (asdf)
-  distortion_coeffs: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_SIAF_2016-11-21.csv           #CSV file containing distortion coefficients
-  ipc: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/ipc/NRCA1_17004_IPCDeconvolutionKernel_2016-03-18_ssbipc_DMSorient.fits                        #File containing IPC kernel to apply
+  astrometric: /ifs/jwst/wit/witserv/data4/nrc/hilbert/distortion_reference_file/jwreftools/nircam/NRCB5_FULL_distortion.asdf  #Astrometric distortion file (asdf)
+  distortion_coeffs: NIRCam_SIAF_2016-09-29.csv         #CSV file containing distortion coefficients
+  ipc: /ifs/jwst/wit/witserv/data7/nrc/reference_files/SSB/CV3/cv3_reffile_conversion/ipc/NRCB5_17161_IPCDeconvolutionKernel_2016-03-18_ssbipc_DMSorient.fits #File containing IPC kernel to apply
   invertIPC: True       #Invert the IPC kernel before the convolution. True or False. Use True if the kernel is designed for the removal of IPC effects, like the JWST reference files are.
-  crosstalk: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/xtalk20150303g0.errorcut.txt              #File containing crosstalk coefficients
+  crosstalk: xtalk20150303g0.errorcut.txt              #File containing crosstalk coefficients
   occult: None                                    #Occulting spots correction image
-  filtpupilcombo: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/nircam_filter_pupil_pairings.list       #File that lists the filter wheel element / pupil wheel element combinations. Used only in writing output file
-  pixelAreaMap: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/jwst_nircam_area_0001.fits              #Pixel area map for the detector. Used to introduce distortion into the output ramp.
-
+  filtpupilcombo: nircam_filter_pupil_pairings.list       #File that lists the filter wheel element / pupil wheel element combinations. Used only in writing output file
+  pixelAreaMap: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/jwst_nircam_area_0001.fits      #Pixel area map for the detector. Used to introduce distortion into the output ramp.
+  flux_cal: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_zeropoints.list  #File that lists flux conversion factor and pivot wavelength for each filter. Only used when making direct image outputs to be fed into the grism disperser code.
 nonlin:
-  limit: 60000.0                           #Upper signal limit to which nonlinearity is applied (ADU)
+  limit: 60000.0                           #Upper singal limit to which nonlinearity is applied (ADU)
   accuracy: 0.000001                        #Non-linearity accuracy threshold
   maxiter: 10                              #Maximum number of iterations to use when applying non-linearity
   robberto:  False                         #Use Massimo Robberto type non-linearity coefficients
@@ -45,42 +45,40 @@ nonlin:
 
 cosmicRay:
   path: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/cosmic_ray_library/               #Path to CR library
-  library: SUNMIN                   #Type of cosmic ray environment (SUNMAX, SUNMIN, FLARE)
-  scale: 1.5                                 #Cosmic ray scaling factor
-  suffix: IPC_NIRCam_A1             #Suffix of library file names
-  seed: 973415283                            #Seed for random number generator
+  library: SUNMIN    #Type of cosmic rayenvironment (SUNMAX, SUNMIN, FLARE)
+  scale: 1.5     #Cosmic ray scaling factor
+  suffix: IPC_NIRCam_B5    #Suffix of library file names
+  seed: 3850009245                           #Seed for random number generator
 
 simSignals:
-  pointsource: point_sources_test.list   #File containing a list of point sources to add (x,y locations and magnitudes)
+  pointsource: candels_catalog_F300M_cropby10_ra_214.8_215.0_dec_52.78_52.98.cat   #File containing a list of point sources to add (x,y locations and magnitudes)
   psfpath: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/psf_files/        #Path to PSF library
   psfbasename: nircam                        #Basename of the files in the psf library
   psfpixfrac: 0.1                           #Fraction of a pixel between entries in PSF library (e.g. 0.1 = files for PSF centered at 0.1 pixel intervals within pixel)
-  psfwfe: 155                               #PSF WFE value (0,115,123,132,136,150,155)
+  psfwfe: 123                               #PSF WFE value (0,115,123,132,136,150,155)
   psfwfegroup: 0                             #WFE realization group (0 to 9)
   galaxyListFile: None    #File containing a list of positions/ellipticities/magnitudes of galaxies to simulate
-  extended: None                  #Extended emission count rate image file name
-  extendedscale: 2.0                          #Scaling factor for extended emission image
+  extended: None          #Extended emission count rate image file name
+  extendedscale: 1.0                          #Scaling factor for extended emission image
   extendedCenter: 1024,1024                   #x,y pixel location at which to place the extended image if it is smaller than the output array size
   PSFConvolveExtended: True #Convolve the extended image with the PSF before adding to the output image (True or False)
-  movingTargetList: None  #Name of file containing a list of point source moving targets (e.g. KBOs, asteroids, satellites) to add. (These objects will move through the fov during the observation)
-  movingTargetSersic: None   #ascii file containing a list of 2D sersic profiles to have moving through the field
-  movingTargetExtended: None  #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)
+  movingTargetList: None          #Name of file containing a list of point source moving targets (e.g. KBOs, asteroids) to add.
+  movingTargetSersic: None  #ascii file containing a list of 2D sersic profiles to have moving through the field
+  movingTargetExtended: None      #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)
   movingTargetConvolveExtended: True       #convolve the extended moving targets with PSF before adding.
-
-  movingTargetToTrack: None  #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to 'moving_target'  
-
+  movingTargetToTrack: None #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to "moving_target" 
   zodiacal:  None                          #Zodiacal light count rate image file 
   zodiscale:  1.0                            #Zodi scaling factor
   scattered:  None                          #Scattered light count rate image file
   scatteredscale: 1.0                        #Scattered light scaling factor
-  bkgdrate: 10.001                          #Constant background count rate (electrons/sec/pixel)
-  poissonseed: 3124580697                   #Random number generator seed for Poisson simulation)
+  bkgdrate: 0.0                         #Constant background count rate (electrons/sec/pixel)
+  poissonseed: 2971234470                  #Random number generator seed for Poisson simulation)
   photonyield: True                         #Apply photon yield in simulation
   pymethod: True                            #Use double Poisson simulation for photon yield
 
 Telescope:
-  ra: "00:00:00.00"                      #RA of simulated pointing
-  dec: "00:00:00.00"                    #Dec of simulated pointing
+  ra: 214.903884379                      #RA of simulated pointing
+  dec: 52.8726789278                    #Dec of simulated pointing
   rotation: 0.0                    #y axis rotation (degrees E of N)
 
 newRamp:
@@ -88,27 +86,43 @@ newRamp:
   proper_combine: BOTH
   proper_signal_limit: 5000
   linearized_darkfile: None
-  dq_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/dq_init.cfg
-  sat_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/saturation.cfg
-  superbias_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/superbias.cfg
-  refpix_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/refpix.cfg
-  linear_configfile: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/linearity.cfg
+  dq_configfile: dq_init.cfg
+  sat_configfile: saturation.cfg
+  superbias_configfile: superbias.cfg
+  refpix_configfile: refpix.cfg
+  linear_configfile: linearity.cfg
 
 Output:
-  file: test.fits    #Output filename
-  format: DMS                            #Output file format Options: DMS, SSR(not yet implemented)
-  save_intermediates: False               #Save intermediate products separately (point source image, etc)
-  grism_source_image: False               #grism
-  grism_input_only: False                  #grism
-  unsigned: True                         #Output unsigned integers? (0-65535 if true. -32768 to 32768 if false)
-  dmsOrient: True                        #Output in DMS orientation (vs. fitswriter orientation).
-  program_number: '99999'                  #Program Number
-  observation_number: '001'               #Obeservation Number
-  visit_number:  '001'                     #Visit Number
-  visit_group: '01'                       #Visit Group
-  obs_id: 'A1'                           #Observation ID
-  visit_id: 'AA'                          #Visit ID
-  sequence_id: '1'                       #Sequence ID
-  activity_id: '01'                      #activity ID - increment for each dither, keep same for each detector within exposure
-  exposure_number: '1'                   #exposure number
-  
+  use_stsci_output_name: True #Output filename should follow STScI naming conventions (True/False)
+  file: V44544001004P000000000111g_uncal.fits   #Output filename
+  format: DMS          #Output file format Options: DMS, SSR(not yet implemented)
+  save_intermediates: False   #Save intermediate products separately (point source image, etc)
+  grism_source_image: False   #grism
+  grism_input_only: False     #grism
+  unsigned: True   #Output unsigned integers? (0-65535 if true. -32768 to 32768 if false)
+  dmsOrient: True    #Output in DMS orientation (vs. fitswriter orientation).
+  program_number: 44544    #Program Number
+  title: NIRCam imaging dither test dataset   #Program title
+  PI_Name: Bryan Hilbert  #Proposal PI Name
+  Proposal_category: GO  #Proposal category
+  Science_category: Planets and Planet Formation  #Science category
+  observation_number: '004'    #Observation Number
+  observation_label: Observation 4    #User-generated observation Label
+  visit_number: '001'    #Visit Number
+  visit_group: '01'    #Visit Group
+  visit_id: '44544001004'    #Visit ID
+  sequence_id: '1'    #Sequence ID
+  activity_id: '1g'    #Activity ID. Increment with each exposure.
+  exposure_number: '00002'    #Exposure Number
+  obs_id: 'V44544001004P000000000111g'   #Observation ID number
+  date_obs: '2017-10-15'  #Date of observation
+  time_obs: '13:15:56.515'  #Time of observation
+  obs_template: 'NIRCam Imaging'  #Observation template
+  primary_dither_type: INTRASCA  #Primary dither pattern name
+  total_primary_dither_positions: 2  #Total number of primary dither positions
+  primary_dither_position: 2  #Primary dither position number
+  subpix_dither_type: STANDARD  #Subpixel dither pattern name
+  total_subpix_dither_positions: 2  #Total number of subpixel dither positions
+  subpix_dither_position: 2  #Subpixel dither position number
+  xoffset: 8.43  #Dither pointing offset in x (arcsec)
+  yoffset: 8.366  #Dither pointing offset in y (arcsec)
