@@ -548,6 +548,9 @@ class RampSim():
         #save the integration
         if self.params['Output']['format'].upper() == 'DMS':
             print("Saving integration in DMS format.")
+            #if self.params['Output']['use_stsci_output_name']:
+            #    self.saveDMS(final_ramp,final_zero,self.params['Output']['obs_id']+'_uncal.fits')
+            #else:
             self.saveDMS(final_ramp,final_zero,self.params['Output']['file'])
             if stp_flag:
                 set_telescope_pointing.add_wcs(self.params['Output']['file'])
@@ -1843,15 +1846,15 @@ class RampSim():
         self.dark.meta.instrument.pupil = pw
         #self.dark.meta.instrument.grating = grism
 
-        self.dark.meta.dither.primary_type = 'NONE'
-        self.dark.meta.dither.position_number = 1
-        self.dark.meta.dither.total_points = '1'
+        self.dark.meta.dither.primary_type = self.params['Output']['primary_dither_type']
+        self.dark.meta.dither.position_number = self.params['Output']['primary_dither_position']
+        self.dark.meta.dither.total_points = str(self.params['Output']['total_primary_dither_positions'])
         self.dark.meta.dither.pattern_size = 0.0
-        self.dark.meta.dither.subpixel_type = 'UNKNOWN'
-        self.dark.meta.dither.subpixel_number = 1
-        self.dark.meta.dither.subpixel_total_points = 1
-        self.dark.meta.dither.xoffset = 0.0
-        self.dark.meta.dither.yoffset = 0.0
+        self.dark.meta.dither.subpixel_type = self.params['Output']['subpix_dither_type']
+        self.dark.meta.dither.subpixel_number = self.params['Output']['subpix_dither_position']
+        self.dark.meta.dither.subpixel_total_points = self.params['Output']['total_subpix_dither_positions']
+        self.dark.meta.dither.xoffset = self.params['Output']['xoffset']
+        self.dark.meta.dither.yoffset = self.params['Output']['yoffset']
 
         # pixel coordinates in FITS header start from 1 not from 0
         xc=(self.subarray_bounds[2]+self.subarray_bounds[0])/2.+1.
