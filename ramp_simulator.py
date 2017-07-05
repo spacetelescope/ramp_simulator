@@ -5323,8 +5323,8 @@ class RampSim():
 
             siaf_row = siaf[match]
 
-            #self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
-            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(siaf_row,ap_name,to_system='ideal')
+            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
+            #self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(siaf_row,ap_name,to_system='ideal')
             
         #convert the input RA and Dec of the pointing position into floats
         #check to see if the inputs are in decimal units or hh:mm:ss strings

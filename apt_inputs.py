@@ -4,21 +4,38 @@
 Given APT output files, read in data relevant to the data simulator,
 organize, and create input files for the simulator.
 
+Inputs:
 
-program number/id (proposal number) - xml
-observation number - pointing file
-visit number - pointing file
-visit group - ?
-obs_id -  ?  not present in keyword dictionary
-visit_id -  ?  11characters = programID+observation+visit
-sequence_id - ? something to do with parallels?
-activity_id - just use a counter when reading in pointing file
-             Or keep a running sum of 'Dith' column in pointing file
-exposure_number - Exp column in pointing file? (e.g. all 12 dithers of grism
-              observation get same exposure number)
-observation_label - in xml and pointing file
+xml file - Name of xml file exported from APT.
+pointing file - Name of associated pointing file exported from APT.
+siaf - Name of csv version of SIAF.
+
+Optional inputs:
+
+epoch_list - Name of ascii file which lists observation labels and 
+             associated starting observation time, as well as telescope
+             roll angle (PAV3). If you wish to have observations back-
+             to-back, give them all the same starting time.
+
+Outputs:
+
+output_csv - Ascii table containing all relevant information needed
+             to construct a ramp simulator input file for each
+             observation/dither/detector combination.
+
+Dependencies:
+
+argparse, lxml, astropy, numpy, collections
+
+JWST Calibration pipeline (only for the use of set_telescope_pointing.py)
+in order to translate PAV3 values to local roll angles for each detector.
+
+rotations.py - Colin Cox's module of WCS-related functions
 
 
+HISTORY:
+
+July 2017 - V0: Initial version. Bryan Hilbert
 
 '''
 
@@ -183,8 +200,12 @@ class AptInput:
                         else:
                             long_pupil = 'CLEAR'
                 
-                        tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismval,coordparallel)
-                        dict = self.add_exposure(dict,tup_to_add)                
+                        tup_to_add = (piname,propid,proptitle,propcat,
+                                      scicat,typeflag,mod,subarr,pdithtype,
+                                      pdither,sdithtype,sdither,sfilt,lfilt,
+                                      rpatt,grps,ints,short_pupil,
+                                      long_pupil,grismval,coordparallel)
+                        dict = self.add_exposure(dict,tup_to_add)
                 
                 wfss_temp = template.find(ncwfss+'NircamWfss')
                 if wfss_temp is not None:
@@ -202,15 +223,17 @@ class AptInput:
                     explist = wfss_temp.find(ncwfss+'ExposureList')
                     expseqs = explist.findall(ncwfss+'ExposureSequences')
             
-                    #if BOTH was specified for the grism, then we need to repeat the
-                    #sequence of grism/direct/grism/direct/outoffield for each grism
+                    #if BOTH was specified for the grism,
+                    #then we need to repeat the sequence of
+                    #grism/direct/grism/direct/outoffield for each grism
                     for gnum in range(len(grismval)):
                         for expseq in expseqs:
                             #sequence = grism,direct,grism,direct,outoffield
-                            #if grism == both, sequence is done for grismr, then repeated for grismc
+                            #if grism == both, sequence is done for grismr,
+                            #then repeated for grismc
                             grismvalue = grismval[gnum]
-                            #need to switch the order of the grism and direct exposures
-                            #in order for them to be chronological
+                            #need to switch the order of the grism and direct
+                            #exposures in order for them to be chronological
                             grismexp = expseq.find(ncwfss+'GrismExposure')
                             typeflag = 'WFSS'
                             sfilt = grismexp.find(ncwfss+'ShortFilter').text
@@ -219,8 +242,8 @@ class AptInput:
                             groups = grismexp.find(ncwfss+'Groups').text
                             integrations = grismexp.find(ncwfss+'Integrations').text
 
-                            #separate pupil and filter in case of filter that is 
-                            #mounted in the pupil wheel
+                            #separate pupil and filter in case of filter
+                            #that is mounted in the pupil wheel
                             if '+' in sfilt:
                                 p = sfilt.find('+')
                                 short_pupil = sfilt[0:p]
@@ -229,7 +252,12 @@ class AptInput:
                                 short_pupil = 'CLEAR'
                     
                             long_pupil = grismvalue
-                            tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismvalue,coordparallel)
+                            tup_to_add = (piname,propid,proptitle,propcat,
+                                          scicat,typeflag,mod,subarr,
+                                          pdithtype,pdither,sdithtype,
+                                          sdither,sfilt,lfilt,rpatt,grps,
+                                          ints,short_pupil,long_pupil,
+                                          grismvalue,coordparallel)
                             dict = self.add_exposure(dict,tup_to_add)
 
                             directexp = expseq.find(ncwfss+'DiExposure')
@@ -244,8 +272,8 @@ class AptInput:
                             grps = directexp.find(ncwfss+'Groups').text
                             ints = directexp.find(ncwfss+'Integrations').text
                 
-                            #separate pupil and filter in case of filter that is 
-                            #mounted in the pupil wheel
+                            #separate pupil and filter in case of filter
+                            #that is mounted in the pupil wheel
                             if '+' in sfilt:
                                 p = sfilt.find('+')
                                 short_pupil = sfilt[0:p]
@@ -260,7 +288,11 @@ class AptInput:
                             else:
                                 long_pupil = 'CLEAR'
             
-                            direct_tup_to_add = (piname,propid,proptitle,propcat,scicat,typeflag,mod,subarr,pdithtype,pdither,sdithtype,sdither,sfilt,lfilt,rpatt,grps,ints,short_pupil,long_pupil,grismvalue,coordparallel)
+                            direct_tup_to_add = (piname,propid,proptitle,propcat,
+                                                 scicat,typeflag,mod,subarr,pdithtype,
+                                                 pdither,sdithtype,sdither,sfilt,lfilt,
+                                                 rpatt,grps,ints,short_pupil,long_pupil,
+                                                 grismvalue,coordparallel)
                             dict = self.add_exposure(dict,direct_tup_to_add)
 
                         #Now we need to make the out of field exposures. We can just duplicate the 
@@ -569,17 +601,6 @@ class AptInput:
         results = tree.xpath(path, namespaces=namespaces)
         targresults = tree.xpath(targpath, namespaces=namespaces)
 
-        #get target names. only one per Observation
-        #for ExposureList in targresults:
-        #    newresults = ExposureList.xpath("apt:Instrument[contains(string(), '{}')]]/apt:Template/nci:NircamImaging".format('NIRCAM'), namespaces=namespaces)
-
-            #for item in mylist:
-            #    entrylist = ExposureList.xpath("apt:TargetID",namespaces=namespaces)
-            #    for entry in entrylist:
-            #        mylist['TargetID'].append(entry.text)
-            
-
-
         #set up variables for output
         MyList = {'Module': [], 'Subarray': [], 'PrimaryDitherType': [],
                   'PrimaryDithers': [], 'SubpixelDitherType': [],
@@ -745,8 +766,10 @@ class AptInput:
                         paren = line.rfind('(')
                         if paren == -1:
                             obslabel = line[2:]
+                            obslabel = obslabel.strip()
                         else:
                             obslabel = line[2:paren-1]
+                            obslabel = obslabel.strip()
                     if line[0:2] == '**':
                         v = elements[2]
                         obsnum,visitnum = v.split(':')
@@ -844,7 +867,7 @@ class AptInput:
         #given the v2,v3 values in each entry, calculate RA,Dec
         #For now, assume a roll angle of zero. We would only
         #know roll angle once the program is scheduled
-        print('Performing RA,Dec updates, assuming a roll angle of zero!!!')
+        #print('Performing RA,Dec updates, assuming a roll angle of zero!!!')
 
         #read in siaf
         distortionTable = ascii.read(self.siaf,header_start=1)
@@ -863,9 +886,10 @@ class AptInput:
             pointing_dec = np.float(self.exposure_tab['dec'][i])
             pointing_v2 = np.float(self.exposure_tab['v2'][i])
             pointing_v3 = np.float(self.exposure_tab['v3'][i])
+            pav3 = np.float(self.exposure_tab['pav3'][i])
 
             #assume for now a telescope roll angle of 0.
-            local_roll = set_telescope_pointing.compute_local_roll(0.,pointing_ra,
+            local_roll = set_telescope_pointing.compute_local_roll(pav3,pointing_ra,
                                                                    pointing_dec,
                                                                    pointing_v2,
                                                                    pointing_v3)
@@ -897,30 +921,9 @@ class AptInput:
 
         
     def create_input_table(self):
-        #read in xml file. Try reading as imaging mode first.
-        #tab_im = self.read_imaging_xml(self.input_xml)
-
-        #try reading as WFSS
-        #if len(tab[tab.keys()[0]]) == 0:
-        #tab_wfss = self.read_wfss_xml(self.input_xml)
-
-        #if len(tab_im['Mode']) == 0:
-        #    if len(tab_wfss['Mode']) > 0:
-        #        tab = tab_wfss
-        #    else:
-        #        print('WARNING: neither imaging nor WFSS observations found! Quitting.')
-        #        sys.exit()
-        #else:
-        #    if len(tab_wfss['Mode']) > 0:
-        #        tab = {}
-        #        for key in tab_im:
-        #            tab[key] = tab_im[key] + tab_wfss[key]
-        #    else:
-        #        tab = tab_im
-
         #read in xml file using the new function
         tab = self.read_xml(self.input_xml)
-        
+                
         #expand the dictionary for multiple dithers. Expand such that there
         #is one entry in each list for each exposure, rather than one entry
         #for each set of dithers
@@ -932,10 +935,16 @@ class AptInput:
         #combine the dictionaries
         obstab = self.combine_dicts(xmltab,pointing_tab)
 
+        #add epoch information
+        obstab = self.add_epochs(obstab)
+
+        #test - look at epoch output
+        #ascii.write(Table(obstab), 'test_epoch_output.csv', format='csv', overwrite=True)
+        
         #expand for detectors. Create one entry in each list for each
         #detector, rather than a single entry for 'ALL' or 'BSALL'
         self.exposure_tab = self.expand_for_detectors(obstab)
-
+        
         #calculate the correct V2,V3 and RA,Dec for each exposure/detector
         self.ra_dec_update()
 
@@ -945,6 +954,37 @@ class AptInput:
             self.output_csv = 'Observation_table_for_'+infile+'.csv'
         ascii.write(Table(self.exposure_tab), self.output_csv, format='csv', overwrite=True)
         print('Final csv exposure list written to {}'.format(self.output_csv))
+
+
+    def add_epochs(self,intab):
+        #add information on the epoch of each observation
+        #if the user entered a list of epochs, read that in
+        default_date = '2020-10-14'
+        
+        if self.epoch_list is not None:
+            epochs = ascii.read(self.epoch_list,header_start=0,data_start=1)
+        else:
+            epochs = Table()
+            epochs['observation'] = intab['obs_label']
+            epochs['date'] = ['2018-10-14'] * len(intab['obs_label'])
+            epochs['pav3'] = [0.] * len(intab['obs_label'])
+            
+        #insert epoch info for each observation into dictionary
+        epoch_start = []
+        epoch_pav3 = []
+        for obs in intab['obs_label']:
+            match = obs == epochs['observation'].data
+            if np.sum(match) == 0:
+                print("No valid epoch line found for observation {}".format(obs))
+                print(epochs['observation'].data)
+                epoch_start.append(default_date)
+                epoch_pav3.append(0.)
+            else:
+                epoch_start.append(epochs['date'][match].data[0])
+                epoch_pav3.append(epochs['pav3'][match].data[0])
+        intab['epoch_start_date'] = epoch_start
+        intab['pav3'] = epoch_pav3
+        return intab
         
 
     def dict_lengths(self,dict):
@@ -966,6 +1006,7 @@ class AptInput:
         parser.add_argument("pointing_file",help='Pointing file from APT describing observations.')
         parser.add_argument("siaf",help='Name of CSV version of SIAF')
         parser.add_argument("--output_csv",help="Name of output CSV file containing list of observations.",default=None)
+        parser.add_argument("--epoch_list",help='Ascii file containing a list of observations, times, and roll angles',default=None)
         return parser
     
 

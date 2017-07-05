@@ -4,50 +4,67 @@
 Function to produce yaml files that can be used as input for 
 the ramp simulator
 
-inputs: 
-read in from a file? 
-passed as lists (i.e. read them from APT file, then pass into this code)?
+Inputs: 
+
+xml file - Name of xml file exported from APT.
+pointing file - Name of associated pointing file exported from APT.
+siaf - Name of csv version of SIAF.
+
+Optional inputs:
+
+output_dir - Directory into which the output yaml files are written
+
+table_file - Ascii table containing observation info. This is the 
+             output from apt_inputs.py Use this if you are
+             not providing xml and pointing files from APT.
 
 
-inputs (each can be a single string/float or a list for multiple exposures?):
+use_nonstsci_names - set to True to override the use of the standard 
+                     STScI naming convention for output files
 
-instrument - APT
-mode - APT
-readpattern - APT
-ngroup - APT
-nint - APT
-array_name - APT+help
-filter - APT
-pupil - APT
-pointsource - USER
-galaxyListFile - USER
-extended - usER
-movingTargetList - USER
-movingTargetSersic? - USER
-movingTargetExtended? - USER
-movingTargetToTrack? - USER
-bkgdrate - USER
-ra  - APT
-dec - APT
-rotation - APT?
-file (output) - USER
-grism_source_image - USER
-grism_input_only - USER
+subarray_def_file - Ascii file containing NIRCam subarray definitions
 
-program_number - APT
-observation_number - APT
-visit_number - APT
-visit_group - APT
-obs_id - APT
-visit_id - APT
-sequence_id - APT
-activity_id - APT
-exposure_number - APT
+readpatt_def_file - Ascii file containing NIRCam readout pattern definitions
 
-seq_id changes based on coordinatedparallel entry 1 for prime 2-5 for parallel
+point_source - point source catalog file. Can be a single file, or a list of
+               catalogs. If it is a list, each filename is expected to contain
+               the filter name for which it is to be used. Catalogs and filters
+               will then be matched up in the output yaml files.
 
-template - observation template  "NIRCam Imaging" for all? WFSS is not listed as an entry in the keyword dictionary
-https://mast.stsci.edu/portal/Mashup/Clients/jwkeywords/index.html
+galaxyListFile - galaxy (sersic) source catalog file. Can be a single name, or 
+                 a list of names. Behavior is identical to point_source above.
+
+extended - extended source catalog file. Behavior is identical to point_source
+            above.
+
+convolveExtended - Set to True to convolve extended sources with NIRCam PSF
+
+movingTarg - Moving (point source) target catalog (sources moving through fov) names.
+             Behavior is the same as point_sources above.
+
+movingTargSersic - Moving galaxy (sersic) target catalog (sources moving through fov) 
+                   names. Behavior is the same as point_sources above.
+                   
+movingTargExtended - Moving extended source target catalog (sources moving through fov)
+                     names. Behavior is the same as point_sources above.
+
+movingTargToTrack - Catalog of non-sidereal targets for non-sidereal tracking observations.
+                    Behavior is the same as point_sources above.
+
+bkgdrate - Uniform background rate (e-/s) to add to observation.
+
+epoch_list - Ascii table file containing epoch start times and telescope roll angles
+             to use for each observation.
+
+
+Dependencies:
+argparse, astropy, numpy, glob, copy
+
+apt_inputs.py - Functions for reading and parsing xml and pointing files from APT.
+
+HISTORY:
+
+July 2017 - V0: Initial version. Bryan Hilbert
 
 '''
 
@@ -57,6 +74,7 @@ import sys,os
 import argparse
 import numpy as np
 from glob import glob
+from copy import deepcopy
 from astropy.time import Time,TimeDelta
 from astropy.table import Table
 from astropy.io import ascii
@@ -76,18 +94,7 @@ class SimInput:
         
         
     def create_inputs(self):
-        #this is the main function, called when inputs are from command line
-        
-        #get input from APT (optional)
-        #parse APT info: NRC_SBALL broken out into individual detectors
-    
-        #get user-specified input - from argparse or set as self.whatever = myval
-        #combine user-specified info and APT info into single dictionary
-
-        #make the inputs a list of dictionaries, and then pass them one at a time
-        #to the yaml-writing function
-        #Or should it be a dictionary where each element is a list, and then
-        #one entry at a time is pulled out from each key?
+        #main function
 
         if ((self.input_xml is not None) & (self.pointing_file is not None) & (self.siaf is not None)):
             print('Using {}, {}, and {} to generate observation table.'.
@@ -98,12 +105,13 @@ class SimInput:
             apt.input_xml = self.input_xml
             apt.pointing_file = self.pointing_file
             apt.siaf = self.siaf
+            apt.epoch_list = self.epoch_list
             apt.create_input_table()
             self.info = apt.exposure_tab
 
             #Add start time info to each element
             self.make_start_times()
-                
+
             #Add a list of output yaml names to the dictionary
             self.make_output_names()
 
@@ -163,9 +171,6 @@ class SimInput:
         self.info['grism_source_image'] = grism_source_image
         self.info['grism_input_only'] = grism_input_only
         
-        #assume a rotation angle of 0 for now
-        self.info['rotation'] = [0.] * len(self.info['Mode']) 
-        
         #level-3 associated keywords that are not present in APT file.
         #not quite sure how to populate these
         self.info['visit_group'] = ['01'] * len(self.info['Mode'])
@@ -178,7 +183,7 @@ class SimInput:
                 seq.append('1')
         self.info['sequence_id'] = seq
         self.info['obs_template'] = ['NIRCam Imaging'] * len(self.info['Mode'])
-        
+
         #write out the updated table, including yaml filenames
         #start times, and reference files
         print('Updated observation table file saved to {}'.format(final_file))
@@ -301,9 +306,22 @@ class SimInput:
         nskip = []
         namp = []
 
-        b = self.obsdate+'T'+self.obstime
-        base = Time(b)
+        #choose arbitrary start time for each epoch
+        epoch_base_time = '16:44:12'
+        epoch_base_time0 = deepcopy(epoch_base_time)
 
+        #b = self.obsdate+'T'+self.obstime
+        #base = Time(b)
+        epoch_base_date = self.info['epoch_start_date'][0] 
+        #epoch_start = deepcopy(epoch_base)
+        base = Time(epoch_base_date +'T'+ epoch_base_time)
+        base_date,base_time = base.iso.split()
+
+        #add the times and dates of the first entry
+        #date_obs.append(base_date)
+        #time_obs.append(base_time)
+        #expstart.append(base.mjd)
+        
         #pick some arbirary overhead values
         act_overhead = 40 #seconds. (filter change)
         visit_overhead = 600 #seconds. (slew)
@@ -311,13 +329,14 @@ class SimInput:
         #get visit,activity_id info for first exposure
         actid = self.info['act_id'][0]
         visit = self.info['visit_num'][0]
-    
+        obsname = self.info['obs_label'][0]
+        
         #read in file containing subarray definitions
         subarray_def = self.get_subarray_defs()
 
         #now read in readpattern definitions
         readpatt_def = self.get_readpattern_defs()
-        
+
         for i in range(len(self.info['Module'])):
             #Get dither/visit 
             #Files with the same activity_id should have the same start time
@@ -325,8 +344,9 @@ class SimInput:
             #exposures within a visit
             next_actid = self.info['act_id'][i]
             next_visit = self.info['visit_num'][i]
+            next_obsname = self.info['obs_label'][i]
 
-            #get the values of nframes and nskip 
+            #get the values of nframes, nskip, and namp 
             readpatt = self.info['ReadoutPattern'][i]
             
             #Find the readpattern of the file
@@ -356,23 +376,45 @@ class SimInput:
                 sys.exit()
             amp = subarray_def['num_amps'][match][0]
             namp.append(amp)    
-
+            
+            #same activity ID
             if next_actid == actid:
                 #in this case, the start time should remain the same
-                date_obs.append(self.obsdate)
-                time_obs.append(self.obstime)
+                date_obs.append(base_date)
+                time_obs.append(base_time)
                 expstart.append(base.mjd)
+                #print(actid,visit,obsname,base_date,base_time)
                 continue
-            elif next_visit > visit:
+
+            epoch_date = self.info['epoch_start_date'][i]
+            epoch_time = deepcopy(epoch_base_time0)
+            #new epoch - update the base time
+            if epoch_date != epoch_base_date:
+                epoch_base_date = deepcopy(epoch_date)
+                base = Time(epoch_base_date+'T'+epoch_base_time)
+                base_date,base_time = base.iso.split()
+                basereset = True
+                date_obs.append(base_date)
+                time_obs.append(base_time)
+                expstart.append(base.mjd)
+                actid = deepcopy(next_actid)
+                visit = deepcopy(next_visit)
+                obsname = deepcopy(next_obsname)
+                continue
+
+            #new visit
+            if next_visit != visit:
                 #visit break. Larger overhead
                 overhead = visit_overhead
             elif ((next_actid > actid) & (next_visit == visit)):
-                #same visit. Smaller overhead
+                #same visit, new activity. Smaller overhead
                 overhead = act_overhead
             else:
                 #should never get in here
                 print("Error. Fix me")
-                
+                sys.exit()
+
+            
             #For cases where the base time needs to change
             #continue down here
             xs = subarray_def['xstart'][match][0]
@@ -389,12 +431,17 @@ class SimInput:
             #Delta should include the exposure time, plus overhead
             delta = TimeDelta(exptime+overhead,format='sec')
             base += delta
-            self.obsdate,self.obstime = base.iso.split()
-            
+            base_date,base_time = base.iso.split()
+                
             #Add updated dates and times to the list
-            date_obs.append(self.obsdate)
-            time_obs.append(self.obstime)
+            date_obs.append(base_date)
+            time_obs.append(base_time)
             expstart.append(base.mjd)
+
+            #increment the activity ID and visit
+            actid = deepcopy(next_actid)
+            visit = deepcopy(next_visit)
+            obsname = deepcopy(next_obsname)
             
         self.info['date_obs'] = date_obs
         self.info['time_obs'] = time_obs
@@ -565,7 +612,7 @@ class SimInput:
             f.write('Telescope:\n')
             f.write('  ra: {}                      #RA of simulated pointing\n'.format(input['ra_ref']))
             f.write('  dec: {}                    #Dec of simulated pointing\n'.format(input['dec_ref']))
-            f.write('  rotation: {}                    #y axis rotation (degrees E of N)\n'.format(input['rotation']))
+            f.write('  rotation: {}                    #y axis rotation (degrees E of N)\n'.format(input['pav3']))
             f.write('\n')
             f.write('newRamp:\n')
             f.write('  combine_method: PROPER\n')
@@ -719,8 +766,7 @@ class SimInput:
         parser.add_argument("--movingTargExtended",help='Moving extended source target catalog (sources moving through fov)',nargs='*',default=[None])
         parser.add_argument("--movingTargToTrack",help='Catalog of non-sidereal targets for non-sidereal tracking obs.',nargs='*',default=[None])
         parser.add_argument("--bkgdrate",help='Uniform background rate (e-/s) to add to observation.',default=0.)
-        parser.add_argument("--obsdate",help='Date string of observation, YYYY-MM-DD',default='2020-10-14')
-        parser.add_argument("--obstime",help='Time string of observation, HH:MM:SS',default='16:30:44.42')
+        parser.add_argument("--epoch_list",help="Table file containing epoch start times and telescope roll angles",default=None)
         return parser
     
 
