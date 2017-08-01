@@ -2,21 +2,23 @@ Inst:
   instrument: NIRCam          #Instrument name
   mode: Imaging                #Observation mode (e.g. imaging, WFSS, moving_target)
   nresetlines: 512                        #eventially use dictionary w/in code to look this up
+  use_JWST_pipeline: True
 
 Readout:
   readpatt: RAPID        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized
   nframe: 1        #Number of frames per group
   nskip: 0         #Number of skipped frames between groups
   ngroup: 3              #Number of groups in integration
-  nint: 1          #Number of integrations per exposure
+  nint: 3          #Number of integrations per exposure
   namp: 1         #Number of amplifiers used in readout (4 for full frame, 1 for subarray)
-  array_name: NRCB5_SUB640    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
+  array_name: NRCB5_FULL    #Name of array (FULL, SUB160, SUB64P, etc) overrides subarray_bounds below
   subarray_bounds: 0, 0, 159, 159          #Coords of subarray corners. (xstart, ystart, xend, yend) Over-ridden by array_name above. Currently not used. Could be used if output saved in raw format
   filter: F300M       #Filter of simulated data (F090W, F322W2, etc)
   pupil: CLEAR        #Pupil element for simulated data (CLEAR, GRISMC, etc)
 
 Reffiles:                                 #Set to None or leave blank if you wish to skip that step
-  dark: /ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/darks/BLONG/NRCNRCBLONG-DARK-53560503591_1_490_SE_2015-12-22T05h34m25_uncal.fits   #Dark current integration used as the base
+  dark: /ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/darks/A1/NRCNRCA1-DARK-60011933591_1_481_SE_2016-01-01T20h04m44_uncal.fits #Dark current integration used as the base
+  linearized_darkfile: /ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/linearized_darks/A1/Linearized_Dark_and_SBRefpix_NRCNRCA1-DARK-60011933591_1_481_SE_2016-01-01T20h04m44_uncal.fits  #Ramp containing linearized dark current. Supercedes the dark file given above
   hotpixmask: None                        #Hot pixel mask to go with the dark integration. If none, the script will find hot pixels. Fits file. Ones are hot. Zeros not.
   superbias: /ifs/jwst/wit/witserv/data4/nrc/hilbert/superbias/cv3/deliver_to_CRDS/NRCB5_superbias_from_list_of_biasfiles.list.fits     #Superbias file. Set to None or leave blank if not using
   subarray_defs: NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates
@@ -79,13 +81,9 @@ simSignals:
 Telescope:
   ra: 214.903884379                      #RA of simulated pointing
   dec: 52.8726789278                    #Dec of simulated pointing
-  rotation: 0.0                    #y axis rotation (degrees E of N)
+  rotation: 92.0                    #y axis rotation (degrees E of N)
 
 newRamp:
-  combine_method: PROPER
-  proper_combine: BOTH
-  proper_signal_limit: 5000
-  linearized_darkfile: None
   dq_configfile: dq_init.cfg
   sat_configfile: saturation.cfg
   superbias_configfile: superbias.cfg
@@ -93,8 +91,8 @@ newRamp:
   linear_configfile: linearity.cfg
 
 Output:
-  use_stsci_output_name: True #Output filename should follow STScI naming conventions (True/False)
-  file: V44544001004P000000000111g_uncal.fits   #Output filename
+  use_stsci_output_name: False #Output filename should follow STScI naming conventions (True/False)
+  file: V44544001004P000000000111g_yespipeline_linearinput_ROT92_uncal.fits   #Output filename
   format: DMS          #Output file format Options: DMS, SSR(not yet implemented)
   save_intermediates: False   #Save intermediate products separately (point source image, etc)
   grism_source_image: False   #grism
