@@ -47,23 +47,24 @@ import numpy as np
 import sys,os
 import collections
 import rotations
+import set_telescope_pointing_separated as set_telescope_pointing
 
 #try to find set_telescope_pointing.py
-try:
-    import imp
-    conda_path = os.environ['CONDA_PREFIX']
-    set_telescope_pointing = imp.load_source('set_telescope_pointing', os.path.join(conda_path, 'bin/set_telescope_pointing.py'))
-    stp_flag = True
-except:
-    print('WARNING: cannot find set_telescope_pointing.py. This is needed')
-    print('to translate telescope roll angle to local roll angle.')
-    sys.exit()
+#try:
+#    import imp
+#    conda_path = os.environ['CONDA_PREFIX']
+#    set_telescope_pointing = imp.load_source('set_telescope_pointing', os.path.join(conda_path, 'bin/set_telescope_pointing.py'))
+#    stp_flag = True
+#except:
+#    print('WARNING: cannot find set_telescope_pointing.py. This is needed')
+#    print('to translate telescope roll angle to local roll angle.')
+#    sys.exit()
     
 class AptInput:
     def __init__(self):
-        self.input_xml = '' #'GOODSS_ditheredDatasetTest.xml'
-        self.output_csv = None #'GOODSS_ditheredDatasetTest.csv'
-        self.pointing_file = '' #'GOODSS_ditheredDatasetTest.pointing'
+        self.input_xml = '' #e.g. 'GOODSS_ditheredDatasetTest.xml'
+        self.output_csv = None #e.g. 'GOODSS_ditheredDatasetTest.csv'
+        self.pointing_file = '' #e.g. 'GOODSS_ditheredDatasetTest.pointing'
         self.siaf = ''
         
 
@@ -132,6 +133,11 @@ class AptInput:
             piname = firstname + ' ' + lastname
         except:
             piname = piname_default
+
+
+        #Also look at mosaic details. All we really need to know
+        #is how many tiles will be taken.
+        
         
         #more streamlined version with valid (i belive) assumptions
         #about format of xml file:
@@ -144,9 +150,9 @@ class AptInput:
         apt = '{http://www.stsci.edu/JWST/APT}'
         nci = "{http://www.stsci.edu/JWST/APT/Template/NircamImaging}"
         ncwfss = "{http://www.stsci.edu/JWST/APT/Template/NircamWfss}"
+        mos = "{http://www.stsci.edu/JWST/APT/MosaicParameters}"
         for obs in obsresults:
-            #for elem in obs:
-            #    print(elem.tag,elem.text)
+            obs_tuple_list = []
             numbele = obs.find(apt+'Number')
             number = numbele.text
             labelele = obs.find(apt+'Label')
@@ -172,9 +178,19 @@ class AptInput:
                     mod = imaging_temp.find(nci+'Module').text
                     subarr = imaging_temp.find(nci+'Subarray').text
                     pdithtype = imaging_temp.find(nci+'PrimaryDitherType').text
-                    pdither = imaging_temp.find(nci+'PrimaryDithers').text
+                    try:
+                        pdither = imaging_temp.find(nci+'PrimaryDithers').text
+                    except:
+                        pdither = '0'
                     sdithtype = imaging_temp.find(nci+'SubpixelDitherType').text
-                    sdither = imaging_temp.find(nci+'SubpixelPositions').text
+                    try:
+                        sdither = imaging_temp.find(nci+'SubpixelPositions').text
+                    except:
+                        try:
+                            stemp = imaging_temp.find(nci+'CoordinatedParallelSubpixelPositions').text
+                            sdither = np.int(stemp[0])
+                        except:
+                            sdither = '0'
                     filtele = imaging_temp.find(nci+'Filters') 
                     filtconfigeles = filtele.findall(nci+'FilterConfig')
                     for fcele in filtconfigeles:
@@ -206,7 +222,8 @@ class AptInput:
                                       rpatt,grps,ints,short_pupil,
                                       long_pupil,grismval,coordparallel)
                         dict = self.add_exposure(dict,tup_to_add)
-                
+                        obs_tuple_list.append(tup_to_add)
+                        
                 wfss_temp = template.find(ncwfss+'NircamWfss')
                 if wfss_temp is not None:
                     mod = wfss_temp.find(ncwfss+'Module').text
@@ -259,7 +276,8 @@ class AptInput:
                                           ints,short_pupil,long_pupil,
                                           grismvalue,coordparallel)
                             dict = self.add_exposure(dict,tup_to_add)
-
+                            obs_tuple_list.append(tup_to_add)
+                            
                             directexp = expseq.find(ncwfss+'DiExposure')
                             typeflag = 'Imaging'
                             pdither = '1' #direct image has no dithers
@@ -294,13 +312,28 @@ class AptInput:
                                                  rpatt,grps,ints,short_pupil,long_pupil,
                                                  grismvalue,coordparallel)
                             dict = self.add_exposure(dict,direct_tup_to_add)
+                            obs_tuple_list.append(tup_to_add)
+                            
+                        #Now we need to add the two out-of-field exposures, which are
+                        #not present in the APT file (but are in the associated pointing
+                        #file from APT. We can just
+                        #duplicate the entries for the direct images taken immediately
+                        #prior. BUT, will there ever be a case where there is no preceding
+                        #direct image?
+                        dict = self.add_exposure(dict,direct_tup_to_add)
+                        dict = self.add_exposure(dict,direct_tup_to_add)
+                        obs_tuple_list.append(tup_to_add)
+                        obs_tuple_list.append(tup_to_add)
 
-                        #Now we need to make the out of field exposures. We can just duplicate the 
-                        #entries for the direct images taken immediately prior. BUT, will there ever
-                        #be a case where there is no preceding direct image?
-                        #Need to add 2 out of field exposures
-                        dict = self.add_exposure(dict,direct_tup_to_add)
-                        dict = self.add_exposure(dict,direct_tup_to_add)
+                #Now we need to look for mosaic details, if any
+                mosaicele = obs.find(apt+'MosaicParameters')
+                mostile = mosaicele.findall(apt+'MosaicTiles')
+                numtiles = len(mostile)
+                if numtiles > 1:
+                    print("Found {} mosaic tiles for observation {}".format(numtiles,obs))
+                    for i in range(numtiles-1):
+                        for tup in obs_tuple_list:
+                            dict = self.add_exposure(dict,tup)
         return dict
 
             
@@ -703,8 +736,12 @@ class AptInput:
         for i in range(len(dict['PrimaryDithers'])):
             entry = np.array([item[i] for item in dict.values()])
             subpix = entry[keys == 'SubpixelPositions']
+            if subpix == '0':
+                subpix = [[1]]
             #in WFSS, SubpixelPositions will be either '4-Point' or '9-Point'
             primary = entry[keys == 'PrimaryDithers']
+            if primary == '0':
+                primary = [1]
             reps = np.int(subpix[0][0]) * np.int(primary[0])
             for key in keys:
                 for j in range(reps):
@@ -783,7 +820,9 @@ class AptInput:
                         #These lines have 'Exp' values of 0,
                         #while observations have a value of 1
                         #(that I've seen so far)
-                        if np.int(elements[1]) > 0:
+                        #
+                        #Also, skip non-NIRCam lines. Check for NRC in aperture name
+                        if ((np.int(elements[1]) > 0) & ('NRC' in elements[4])):
                             act = self.base36encode(act_counter)
                             activity_id.append(act)
                             observation_label.append(obslabel)

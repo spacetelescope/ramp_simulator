@@ -3,21 +3,22 @@
 '''
 Rewritten version of Kevin Volk's rampsim.py. Updated to be more general
 and flexible such that other instruments can use the code
-
-STILL DON'T HAVE PSFS FOR WLP8+FILTER COMBINATIONS
 '''
+__version__ = "1.1" # Fairly major update to remove dependence on
+                    # JWST pipeline if requested. Also reworked
+                    # the linearized dark ramp input to work.
+
 
 import argparse,sys, glob, os
 import yaml
 from copy import copy
 import scipy.ndimage.interpolation as interpolation
 import scipy.signal as s1
-from jwst.datamodels import RampModel #build 7
 import numpy as np
 import math,random
 from astropy.io import fits,ascii
 from astropy.table import Table
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 from itertools import izip
 import datetime
 from astropy.modeling.models import Sersic2D
@@ -27,28 +28,18 @@ import polynomial #more of Colin's functions
 from astropy.convolution import convolve
 import read_siaf_table
 import moving_targets
+import read_fits
+import set_telescope_pointing_separated as set_telescope_pointing
 
-#try to find set_telescope_pointing.py
-try:
-    import imp
-    conda_path = os.environ['CONDA_PREFIX']
-    set_telescope_pointing = imp.load_source('set_telescope_pointing', os.path.join(conda_path, 'bin/set_telescope_pointing.py'))
-    stp_flag = True
-except:
-    print("Unable to import set_telescope_pointing.py. This must be run on the")
-    print("simulated ramps prior to running the assign_wcs step of the pipeline.")
-    print("Once found, run with: set_telescope_pointing.py filename, or from")
-    print("within python: set_telescope_pointing.add_wcs(filename)")
-    stp_flag = False
-   
-inst_list = ['nircam','niriss','nirspec','miri','fgs']
-modes = {'nircam':['imaging','moving_target','wfss','coron'],'niriss':['imaging','wfss','soss']}
-inst_abbrev = {'nircam':'NRC','nirspec':'NRS','miri':'MIRI','niriss':'NRS'}
-#pointSourceModes = ['imaging']
+#make sure you query the build 7.1 engineering database
+os.environ['ENG_RESTFUL_URL'] = 'http://iwjwdmsbemwebv.stsci.edu/JWDMSEngFqAccB71/TlmMnemonicDataSrv.svc/'
+
+inst_list = ['nircam']
+modes = {'nircam':['imaging','moving_target','wfss','coron']}
+inst_abbrev = {'nircam':'NRC'}
 pixelScale = {'nircam':{'sw':0.031,'lw':0.063}}
 full_array_size = {'nircam':2048}
 allowedOutputFormats = ['DMS']
-#need a list of filters that go with each mode....
 
 class RampSim():
 
@@ -71,6 +62,12 @@ class RampSim():
         #read in the parameter file
         self.readParameterFile()
 
+        #if the user requests that a linearized dark be used
+        #rather than a raw dark, then set the use_JWST_pipeline
+        #option to false
+        #if self.params['Reffiles']['linearized_darkfile'] != 'None':
+        #    self.params['Inst']['use_JWST_pipeline'] = False
+
         #check the consistency of the input readpattern and nframe/nskip
         self.readpatternCheck()
         
@@ -83,89 +80,273 @@ class RampSim():
         #define the subarray bounds from param file
         self.getSubarrayBounds()
 
-        #read in the input dark current frame, and crop using
-        #the subarray bounds provided in the parameter file
-        self.getBaseDark()
-        
+        #read in the input dark current frame
+        if self.runStep['linearized_darkfile'] == False:
+            self.getBaseDark()
+            self.linDark = None
+        else:
+            print(self.params['Reffiles']['linearized_darkfile'])
+            self.readLinearDark()
+            self.dark = self.linDark
+
+        print("As read in:")
+        print(self.dark.data[0,0:3,400,400])
+            
+        #print("self.dark as read in: {} {} {}".format(self.dark.data.shape,self.dark.zeroframe.shape,self.dark.sbAndRefpix.shape))
+        #print("self.linDark as read in: {} {} {}".format(self.linDark.data.shape,self.linDark.zeroframe.shape,self.linDark.sbAndRefpix.shape))        
+
+            
         #make sure there is enough data (frames/groups) in the input integration to produce
         #the proposed output integration
-        self.dataVolumeCheck()
+        self.dataVolumeCheck(self.dark)
+
+        print("After volume check:")
+        print(self.dark.data[0,0:3,400,400])
+
+        
+        print("After volume check:")
+
+
+        try:
+            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
+        except:
+            print('Read raw dark, data extension not present!!')
+
+        try:
+            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        except:
+            print('Read raw dark, zeroframe extension not present!!')
+
+        try:
+            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        except:
+            print('Read raw dark, sbAndRefpix extension not present!!')
+
+            
+        try:
+            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
+        except:
+            print('Read linear dark, data extension not present!!')
+
+        try:
+            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        except:
+            print('Read linear dark, zeroframe extension not present!!')
+
+        try:
+            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        except:
+            print('Read linear dark, sbAndRefpix extension not present!!')
+            
 
         #compare the requested number of integrations to the number
         #of integrations in the input dark
         print("Dark shape as read in: {}".format(self.dark.data.shape))
         self.darkints()
         print("Dark shape after copying integrations to match request: {}".format(self.dark.data.shape))
+
+        print("After darkints:")
+        print(self.dark.data[0,0:3,400,400])
+
+
         
-        #If the proper method of combining the dark and simulated signal
-        #is to be used on any pixels, then get the linearized version of
-        #the dark ramp here. If it is not specified by the user, then 
-        #create it on the fly using the SSB pipeline. Better to do this 
+        print("After darkints:")
+
+        try:
+            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
+        except:
+            print('Read raw dark, data extension not present!!')
+
+        try:
+            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        except:
+            print('Read raw dark, zeroframe extension not present!!')
+
+        try:
+            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        except:
+            print('Read raw dark, sbAndRefpix extension not present!!')
+
+            
+        try:
+            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
+        except:
+            print('Read linear dark, data extension not present!!')
+
+        try:
+            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        except:
+            print('Read linear dark, zeroframe extension not present!!')
+
+        try:
+            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        except:
+            print('Read linear dark, sbAndRefpix extension not present!!')
+        
+
+        # Put the input dark (or linearized dark) into the requested
+        # readout pattern
+        #self.dark,darkzeroframe,sbzeroframe = self.reorderDark(self.dark)
+        self.dark,sbzeroframe = self.reorderDark(self.dark)
+        print('DARK has been reordered to {} to match the input readpattern of {}'.
+              format(self.dark.data.shape,self.dark.header['READPATT']))
+
+        print("After reorder:")
+        print(self.dark.data[0,0:3,400,400])
+        
+        print("After reordering:")
+
+        try:
+            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
+        except:
+            print('Read raw dark, data extension not present!!')
+
+        try:
+            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        except:
+            print('Read raw dark, zeroframe extension not present!!')
+
+        try:
+            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        except:
+            print('Read raw dark, sbAndRefpix extension not present!!')
+
+            
+        try:
+            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
+        except:
+            print('Read linear dark, data extension not present!!')
+
+        try:
+            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        except:
+            print('Read linear dark, zeroframe extension not present!!')
+
+        try:
+            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        except:
+            print('Read linear dark, sbAndRefpix extension not present!!')
+
+        
+        #If a raw dark was read in, create linearized version here
+        #using the SSB pipeline. Better to do this 
         #on the full dark before cropping, so that reference pixels can be
         #used in the processing.
-        self.linDark = None
-        self.sbAndRefPixEffects = None
-        if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            if self.runStep['linearized_darkfile'] == False:
-                #before superbias subtraction, refpix subtraction and linearizing
-                #Reorganize the dark according to the requested output readout pattern
-                self.dark,darkzeroframe = self.reorderDark(self.dark)
-                print('DARK has been reordered to {} to match the input readpattern of {}'.format(self.dark.data.shape,self.dark.meta.exposure.readpatt))
-                #Linearize the dark ramp via the SSB pipeline. Also save a diff image of 
-                #the original dark minus the superbias and refpix subtracted dark, to use later.
-                self.linDark, self.sbAndRefpixEffects = self.linearizeDark(self.dark)
-                print("Linearized dark shape: {}".format(self.linDark.data.shape))
-                
+
+        if ((self.params['Inst']['use_JWST_pipeline']) & (self.runStep['linearized_darkfile'] == False)):
+
+            #Linearize the dark ramp via the SSB pipeline. Also save a diff image of 
+            #the original dark minus the superbias and refpix subtracted dark, to use later.
+
+            #in order to linearize the dark, the JWST pipeline must be present, and self.dark
+            #will have to be translated back into a RampModel instance
+            #self.linDark, self.sbAndRefpixEffects = self.linearizeDark(self.dark)
+            self.linDark = self.linearizeDark(self.dark)
+            print("Linearized dark shape: {}".format(self.linDark.data.shape))
+
+            if self.params['Readout']['readpatt'].upper() == 'RAPID':
+                print("output is rapid, grabbing zero frame from linearized dark")
+                zeroModel = read_fits.Read_fits()
+                zeroModel.data = self.linDark.data[:,0,:,:] #can't grab all zeroframes (for multiple ints)'
+                zeroModel.sbAndRefpix = self.linDark.sbAndRefpix[:,0,:,:]
+            elif ((self.params['Readout']['readpatt'].upper() != 'RAPID') & (self.dark.zeroframe is not None)):
+                print("Now we need to linearize the zeroframe because the")
+                print("output readpattern is not RAPID")
                 #Now we need to linearize the zeroframe. Place it into a RampModel instance
                 #before running the pipeline steps
-                if darkzeroframe is not None:
-                    zeroModel = RampModel()
-                    zyd,zxd = darkzeroframe.shape
-                    filler = np.zeros((1,1,zyd,zxd))
-                    zeroModel.data = np.expand_dims(np.expand_dims(darkzeroframe,axis=0),axis=0)
-                    zeroModel.err = filler
-                    zeroModel.groupdq = filler
-                    zeroModel.meta = self.dark.meta
-                    zeroModel.meta.exposure.nints = 1
-                    zeroModel.meta.exposure.ngroups = 1
-                    zeroModel.meta.exposure.nframes = 1
-                    zeroModel.meta.exposure.groupgap = 0
-                    zeroModel.meta.exposure.readpatt = 'RAPID'
-                    zeroModel, zero_sbAndRefEffects = self.linearizeDark(zeroModel)
-                    print("zeroModel shape: {}".format(zeroModel.data.shape))
-                    zero_sbAndRefEffects = zero_sbAndRefEffects[0,0,:,:]
-                    #print('linearized the dark current zero frame. {}'.format(zeroModel.data.shape))
-
-                    #now crop the zero frame to match the specified output size
-                    #zeroModel = self.cropDark(zeroModel)
-                    #zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-                    #print('cropped the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
+                zeroModel = read_fits.Read_fits()
+                zeroModel.data = self.dark.zeroframe
+                zeroModel.header = self.linDark.header
+                zeroModel.header['NGROUPS'] = 1
+                zeroModel = self.linearizeDark(zeroModel)
             else:
-                zeroModel = self.readLinearDark()
-                self.sbAndRefpixEffects = None
-                zero_sbAndRefEffects = None
+                zeroModel = None
+
+            #Now crop self.linDark, self.dark, and zeroModel to requested subarray
+            self.dark = self.cropDark(self.dark)
+            self.linDark= self.cropDark(self.linDark)
+            if zeroModel is not None:
+                zeroModel = self.cropDark(zeroModel)
+        else:
+
+            #if no pipeline is run
+            zeroModel = read_fits.Read_fits()
+            zeroModel.data = self.dark.zeroframe
+            zeroModel.sbAndRefpix = sbzeroframe
 
             #Crop the linearized dark to the requested
             #subarray size
+            #THIS WILL CROP self.dark AS WELL SINCE
+            #self.linDark IS JUST A REFERENCE IN THE NON
+            #PIPELINE CASE!!
             self.linDark = self.cropDark(self.linDark)
-            if zeroModel is not None:
+            if zeroModel.data is not None:
                 zeroModel = self.cropDark(zeroModel)
                 print('cropped #2 the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
 
-            if zero_sbAndRefEffects is not None:
-                zero_sbAndRefEffects = zero_sbAndRefEffects[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-                
-            #save the linearized dark for testing
-            if self.params['Output']['save_intermediates']:
-                h0=fits.PrimaryHDU()
-                h1 = fits.ImageHDU(self.linDark.data)
-                h2 = fits.ImageHDU(zeroModel.data)
-                hl=fits.HDUList([h0,h1,h2])
-                hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
 
-        #Now crop the dark current ramp 
-        #down to the requested subarray size
-        self.dark = self.cropDark(self.dark)
+        try:
+            print('After Pipeline raw dark, data shape: {}'.format(self.dark.data.shape))
+        except:
+            print('After Pipeline raw dark, data extension not present!!')
+
+        try:
+            print('After Pipeline raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        except:
+            print('After Pipeline raw dark, zeroframe extension not present!!')
+
+        try:
+            print('After Pipeline raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        except:
+            print('After Pipeline raw dark, sbAndRefpix extension not present!!')
+
+            
+        try:
+            print('After Pipeline linear dark, data shape: {}'.format(self.linDark.data.shape))
+        except:
+            print('After Pipeline linear dark, data extension not present!!')
+
+        try:
+            print('After Pipeline linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        except:
+            print('After Pipeline linear dark, zeroframe extension not present!!')
+
+        try:
+            print('After Pipeline linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        except:
+            print('After Pipeline linear dark, sbAndRefpix extension not present!!')
+
+            
+        try:
+            print('After Pipeline zeromodel, data shape: {}'.format(zeroModel.data.shape))
+        except:
+            print('After Pipeline zeromodel, data extension not present!!')
+
+        try:
+            print('After Pipeline zeromodel, zeroframe shape: {}'.format(zeroModel.zeroframe.shape))
+        except:
+            print('After Pipeline zeromodel, zeroframe extension not present!!')
+
+        try:
+            print('After Pipeline zeromodel, sbAndRefpix shape: {}'.format(zeroModel.sbAndRefpix.shape))
+        except:
+            print('After Pipeline zeromodel, sbAndRefpix extension not present!!')
+
+#        print("self.dark after pipeline: {} {} {}".format(self.dark.data.shape,self.dark.zeroframe.shape,self.dark.sbAndRefpix.shape))
+#        try:
+#            print("self.linDark after pipline: {} {} {}".format(self.linDark.data.shape,self.linDark.zeroframe.shape,self.linDark.sbAndRefpix.shape))        
+#        except:
+#            pass
+
+
+                
+        #save the linearized dark for testing
+        if self.params['Output']['save_intermediates']:
+            h0=fits.PrimaryHDU()
+            h1 = fits.ImageHDU(self.linDark.data)
+            h2 = fits.ImageHDU(zeroModel.data)
+            hl=fits.HDUList([h0,h1,h2])
+            hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
 
         #save the cropped dark for testing
         if self.params['Output']['save_intermediates']:
@@ -173,13 +354,18 @@ class RampSim():
             h1 = fits.ImageHDU(self.dark.data)
             hl=fits.HDUList([h0,h1])
             hl.writeto(self.params['Output']['file'][0:-5] + '_croppedDark.fits',overwrite=True)
-            
+
+        print("After cropping to subarrays, the shapes of self.dark, self.linDark are: {},{}"
+              .format(self.dark.data.shape,self.linDark.data.shape))
+
+        print("Size of the sbandrefpix extension: {}".format(self.linDark.sbAndRefpix.shape))
+
         #Find the difference between the cropped original dark and the cropped linearized dark
         #This will be used later to re-add the superbias and refpix-associated signal to the final
         #output ramp.
-        if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            if self.sbAndRefpixEffects is not None:
-                self.sbAndRefpixEffects = self.sbAndRefpixEffects[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
+        #if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
+        #    if self.sbAndRefpixEffects is not None:
+        #        self.sbAndRefpixEffects = self.sbAndRefpixEffects[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1] 
 
         #calculate the exposure time of a single frame, based on the size of the subarray
         self.calcFrameTime()
@@ -199,10 +385,6 @@ class RampSim():
 
         #image dimensions
         self.nominal_dims = np.array([self.subarray_bounds[3]-self.subarray_bounds[1]+1,self.subarray_bounds[2]-self.subarray_bounds[0]+1])
-        #self.grism_dims = (self.nominal_dims * np.array([self.coord_adjust['y'],self.coord_adjust['x']])).astype(np.int)
-        #print("Nominal output image dimensions: {}".format(self.nominal_dims))
-        #print("Grism output image dimensions: {}".format(self.grism_dims))
-
         self.output_dims = (self.nominal_dims * np.array([self.coord_adjust['y'],self.coord_adjust['x']])).astype(np.int)
 
         #generate the signal image from the input reference files
@@ -439,7 +621,6 @@ class RampSim():
             hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_sources_plus_det_effects_ramp.fits',overwrite=True)
 
 
-
         #If grism direct data is requested, then save the signal 
         if self.params['Output']['grism_source_image']:
             if ((self.params['Inst']['mode'].lower() == 'moving_target') or (mov_targs_integration is not None)):
@@ -489,37 +670,17 @@ class RampSim():
             dy,dx = self.dark.data.shape[2:]
             self.satmap = np.zeros((dy,dx)) + self.params['nonlin']['limit']
             
-        #If some or all of the pixels will be combined using the proper method,
-        #do that here
-        if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            proper_ramp,proper_zero = self.doProperCombine(signalramp,self.sbAndRefpixEffects,zeroModel.data[0,0,:,:],zero_sbAndRefEffects)
+        # Combine the dark current ramp and the synthetic signal ramp
+        print(signalramp.shape)
+        print(self.linDark.data.shape)
+        print(self.linDark.sbAndRefpix.shape)
+        print(zeroModel.data.shape)
+        print(zeroModel.sbAndRefpix.shape)
+        #print("stopping at doProperCombine. keep an eye on shapes of zeromodel. keep as 2d always for now? (assumes no multiple integrations. make sure this is true both for pipeline and non-pipeline situations")
+        proper_ramp,proper_zero = self.doProperCombine(signalramp,self.linDark.sbAndRefpix,zeroModel.data,zeroModel.sbAndRefpix)
+        final_ramp = proper_ramp
+        final_zero = proper_zero
 
-        #If the standard method will be used for at least some pixels, do that here.
-        if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','STANDARD']:
-            print('rework dostandardcombine to handle signalramp, which can be 3d, and signalzero')
-            sys.exit()
-            standard_ramp,standard_zero = self.doStandardCombine(signalramp,mov_targs_integration,mov_targs_zeroframe) 
-
-        #If the proper technique is being used on hot pixels and the standard technique
-        #on darker pixels, then combine the results here.
-        if self.params['newRamp']['combine_method'].upper() == 'HIGHSIG':
-            final_ramp,final_zero = self.combineFinalRamps(standard_ramp,proper_ramp,standard_zero,proper_zero)
-        if self.params['newRamp']['combine_method'].upper() == 'PROPER':
-            final_ramp = proper_ramp
-            final_zero = proper_zero
-        if self.params['newRamp']['combine_method'].upper() == 'STANDARD':
-            final_ramp = standard_ramp
-            final_zero = standard_zero
-
-        #set any pixels that are above their saturation level to just above their saturation
-        #level. We want to prevent crazy values from popping up when the ramp is saved. When being
-        #saved in DMS format, the ramp is converted to a 16-bit integer, so we don't want to feed in
-        #really large values to that conversion.
-        #print(final_ramp.shape)
-        #bad = final_zero > self.satmap
-        #minval = np.minimum(self.satmap+200.,65535)
-        #final_zero[bad] = minval[bad]
-        
         #Set any pixels with signals above 65535 to 65535.  We want to prevent crazy values from 
         #popping up when the ramp is saved. When being saved in DMS format, the ramp is converted 
         #to a 16-bit integer, so we don't want to feed in really large values to that conversion.
@@ -537,32 +698,18 @@ class RampSim():
         final_ramp[badhigh] = 65535
         final_ramp[badlow] = 0
             
-        #for grp in xrange(final_ramp.shape[0]):    
-        #    frame = final_ramp[grp,:,:]
-        #    bad = frame > 65535
-        #    frame[bad] = 65535
-        #    bad2 = frame < 0
-        #    frame[bad2] = 0
-        #    final_ramp[grp,:,:] = frame
-
         #save the integration
-        if self.params['Output']['format'].upper() == 'DMS':
-            print("Saving integration in DMS format.")
-            #if self.params['Output']['use_stsci_output_name']:
-            #    self.saveDMS(final_ramp,final_zero,self.params['Output']['obs_id']+'_uncal.fits')
-            #else:
+        #if self.params['Output']['format'].upper() == 'DMS':
+        if self.params['Inst']['use_JWST_pipeline']:
+            print("Saving exposure in DMS format using datamodels.")
             self.saveDMS(final_ramp,final_zero,self.params['Output']['file'])
-            if stp_flag:
-                set_telescope_pointing.add_wcs(self.params['Output']['file'])
-            else:
-                print("Unable to import set_telescope_pointing.py. This must be run on the")
-                print("simulated ramps prior to running the assign_wcs step of the pipeline.")
-                print("Once found, run with: set_telescope_pointing.py filename, or from")
-                print("within python: set_telescope_pointing.add_wcs(filename)")
         else:
-            print("Saving the output data in a format other than DMS not yet implemented!!!")
-            sys.exit()
+            print("Saving exposure in DMS format using astropy.")
+            self.savefits(final_ramp,final_zero,self.params['Output']['file'])
 
+        #query the engineering database in order to popularte basic WCS info
+        set_telescope_pointing.add_wcs(self.params['Output']['file'],roll=self.params['Telescope']['rotation'])
+        
 
     def getAttitudeMatrix(self):
         #create an attitude_matrix from the distortion reference file model and other info
@@ -583,8 +730,10 @@ class RampSim():
             #Fewer requested integrations than are in the input dark.
             print("{} output integrations requested.".format(reqints))
             self.dark.data = self.dark.data[0:reqints,:,:,:]
-            self.dark.err = self.dark.err[0:reqints,:,:,:]
-            self.dark.groupdq = self.dark.groupdq[0:reqints,:,:,:]
+            if self.dark.sbAndRefpix is not None:
+                self.dark.sbAndRefpix = self.dark.sbAndRefpix[0:reqints,:,:,:]
+            if self.dark.zeroframe is not None:
+                self.dark.zeroframe = self.dark.zeroframe[0:reqints,:,:]
 
         elif reqints > ndarkints:
             #More requested integrations than are in input dark.
@@ -603,20 +752,26 @@ class RampSim():
         #full copies of the dark exposure (all integrations)
         if ncopies > 0:
             copydata = self.dark.data
-            copyerr = self.dark.err
-            copydq = self.dark.groupdq
+            if self.dark.sbAndRefpix is not None:
+                copysb = self.dark.sbAndRefpix
+            if self.dark.zeroframe is not None:
+                copyzero = self.dark.zero
             for i in range(ncopies):
                 self.dark.data = np.vstack((self.dark.data,copydata))
-                self.dark.err = np.vstack((self.dark.err,copyerr))
-                self.dark.groupdq = np.vstack((self.dark.groupdq,copydq))
+                if self.dark.sbAndRefpix is not None:
+                    self.dark.sbAndRefpix = np.vstack((self.dark.sbAndRefpix,copysb))
+                if self.dark.zeroframe is not None:
+                    self.dark.zeroframe = np.vstack((self.dark.zeroframe,copyzero))
                 
         #partial copy of dark (some integrations)
         if extras > 0:
             self.dark.data = np.vstack((self.dark.data,self.dark.data[0:extras,:,:,:]))
-            self.dark.err = np.vstack((self.dark.err,self.dark.err[0:extras,:,:,:]))
-            self.dark.groupdq = np.vstack((self.dark.groupdq,self.dark.groupdq[0:extras,:,:,:]))
+            if self.dark.sbAndRefpix is not None:
+                self.dark.sbAndRefpix = np.vstack((self.dark.sbAndRefpix,self.dark.sbAndRefpix[0:extras,:,:,:]))
+            if self.dark.zeroframe is not None:
+                self.dark.zeroframe = np.vstack((self.dark.zeroframe,self.dark.zeroframe[0:extras,:,:]))
 
-        self.dark.meta.exposure.nints = req
+        self.dark.header['NINTS'] = req
             
             
     def nonsidereal_CRImage(self,file):
@@ -1187,56 +1342,6 @@ class RampSim():
 
         return final_ramp,final_zero
 
-    
-
-    def doStandardCombine(self,signalimg,moving_targs,moving_targs_zero):
-            
-        #signal adjustments - (gain, poisson noise, CR hits)
-        #Return a full ramp where each frame is constructed based on the
-        #single signalimage frame.
-        print('Creating a synthetic signal ramp from the synthetic signal rate image using the standard technique.')
-        synthetic_ramp,syn_zeroframe = self.standardFrameToRamp(signalimg)
-
-        #Ensure that no signals are present in the reference pixels if present
-        #by using a mask
-        maskimage = np.zeros((self.ffsize,self.ffsize),dtype=np.int)
-        maskimage[4:self.ffsize-4,4:self.ffsize-4] = 1.
-        
-        #crop the mask to match the requested output array
-        if self.params['Readout']['array_name'] != "FULL":
-            maskimage = maskimage[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-
-        synthetic_ramp *= maskimage
-        syn_zeroframe *= maskimage
-
-        
-        #if intermediate products are being saved, save the synthetic signal ramp
-        if self.params['Output']['save_intermediates']:
-            synthName = self.params['Output']['file'][0:-5] + '_syntheticSignalRamp.fits'
-            #self.saveSingleFits(synthetic_ramp,synthName)
-            h0 = fits.PrimaryHDU()
-            h1 = fits.ImageHDU(synthetic_ramp)
-            h2 = fits.ImageHDU(syn_zeroframe)
-            hl = fits.HDUList([h0,h1,h2])
-            hl.writeto(synthName,overwrite=True)
-            print("Ramp of synthetic signals saved as {}".format(synthName))
-            
-        #add the synthetic ramp to the dark current ramp,
-        #making sure to adjust the dark current ramp if necessary
-        #to account for nframe/nskip values
-        print('Adding the synthetic signal ramp to the base dark current ramp.')
-        standard_ramp,standard_zeroframe = self.addSyntheticToDark(synthetic_ramp,self.dark,syn_zeroframe=syn_zeroframe)
-
-        #Add moving targets integration if present
-        if moving_targs is not None:
-            print(standard_ramp.shape)
-            print(moving_targs.shape)
-            standard_ramp += moving_targs
-            if standard_zeroframe is not None:
-                standard_zeroframe += moving_targs_zero
-
-        return standard_ramp,standard_zeroframe
-
 
 
     def doProperCombine(self,signalimage,refpix_effects,zeroframe,zeroRefEffects):
@@ -1247,6 +1352,9 @@ class RampSim():
         #requested readout pattern
         syn_linear_ramp,syn_linear_zero = self.prepSynRamp(signalimage)
 
+        print('syn_linear_ramp shape is {}'.format(syn_linear_ramp.shape))
+        print('syn_linear_zero shape is {}'.format(syn_linear_zero.shape))
+        
         #Ensure that no signals are present in the reference pixels if present
         #by using a mask
         maskimage = np.zeros((self.ffsize,self.ffsize),dtype=np.int)
@@ -1273,8 +1381,11 @@ class RampSim():
         #add synthetic ramp to the dark ramp
         print('Adding the synthetic signal ramp to the dark current ramp.')
 
-        lin_outramp,lin_zeroframe = self.addSyntheticToDark(syn_linear_ramp,self.linDark,syn_zeroframe=None)
+        print("data going in: syn_linear_ramp {}, self.linDark {}".format(syn_linear_ramp.shape,self.linDark.data.shape))
 
+        
+        lin_outramp,lin_zeroframe = self.addSyntheticToDark(syn_linear_ramp,self.linDark,syn_zeroframe=None)
+        
         #add the dark current zero frame to the synthetic signal zero frame
         if zeroframe is not None:
             lin_zeroframe = syn_linear_zero + zeroframe
@@ -1299,8 +1410,8 @@ class RampSim():
             #set NaN coefficients such that no correction will be made
             nans = np.isnan(nonlin[1,:,:])
             numnan = np.sum(nans)
-            print('The linearity coefficients of {} pixels are NaNs. Setting these coefficients such'.format(numnan))
-            print('that no linearity correction is made.')
+            print('The linearity coefficients of {} pixels are NaNs. Setting these'.format(numnan))
+            print('coefficients such that no linearity correction is made.')
             for i,cof in enumerate(range(nonlin.shape[0])):
                 tmp = nonlin[cof,:,:]
                 if i == 1:
@@ -1309,21 +1420,15 @@ class RampSim():
                     tmp[nans] = 0.
                 nonlin[cof,:,:] = tmp
 
-                    
             #If the saturation map is given, don't settle for a single number for the nonlin limit. 
             #Read in saturation map, and translate into a linearity-corrected saturation map, and
             #use that as the nonlin limit. If the saturation map isn't provided, then fall back
             #to a single value.
-            if self.runStep['saturation_lin_limit']:
-            #    satmap,sathead = self.readCalFile(self.params['Reffiles']['saturation'])
-        
-                #Remove the non-linearity from the saturation map values, arriving at a
-                #saturation map of corrected signals
-                #this is now done within dononlin
-                #adj_satmap = self.nonLinFunc(self.satmap,nonlin,self.satmap)
-                pass
-            else:
-                self.satmap = np.zeros_like(newimage) + self.params['nonlin']['limit']
+            #if self.runStep['saturation_lin_limit']:
+            #    #satmap has already been read in
+            #    pass
+            #else:
+            #    self.satmap = np.zeros_like(newimage) + self.params['nonlin']['limit']
                 
             #Now insert the non-linearity into the ramp as well as the zeroframe if it exists
             properramp = self.doNonLin(lin_outramp,nonlin,self.satmap)#adj_satmap)
@@ -1345,31 +1450,10 @@ class RampSim():
             hl = fits.HDUList([h0,h1,h2])
             hl.writeto(propername,overwrite=True)
 
-            
-        #Look for pixels with crazy values. These are most likely due to the Newton's Method being
-        #used to insert the non-linearity failing to converge, probably from bad linearity coefficients
-        #or a bad initial guess. Set these pixels' signals to zero
-        #bad = ((properramp < -100) | (properramp > 1e5))
-        #badlast = ((properramp[-1,:,:] < -100) | (properramp[-1,:,:] > 1e5))
-        #numbad = np.sum(badlast)
-        #yb,xb = properramp[-1,:,:].shape
-        #print("Non-linearity added in to combined synthetic+dark signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*100./(xb*yb)))
-        #print("have bad signal values. These will be set to 0 or 65535 when the integration is saved.")
-
-        #nonconvmap = np.zeros_like(properramp)
-        #nonconvmap[bad] = 1
-        #if self.params['Output']['save_intermediates']:
-        #    h0 = fits.PrimaryHDU()
-        #    h1 = fits.ImageHDU(nonconvmap)
-        #    hl = fits.HDUList([h0,h1])
-        #    crazymap = self.params['Output']['file'][0:-5] + '_synPlusDark_lin_nonconverging_pix.fits'
-        #    hl.writeto(crazymap,overwrite=True)
-        #    print("A map of these pixels has been saved to {}".format(crazymap))
-
         #Now add the superbias and reference pixel effects back into the ramp to get it back
         #to a 'raw' state
         if refpix_effects is not None:
-            properramp += refpix_effects#[0,:,:,:]
+            properramp += refpix_effects
             properzero += zeroRefEffects
 
         #Outputs need to be 16-bit integers
@@ -1394,188 +1478,10 @@ class RampSim():
             hl = fits.HDUList([h0,h1,h2])
             hl.writeto(propername,overwrite=True)
 
-            
         return properramp,properzero
         
-
-    def standardFrameToRamp(self,frameimg):
-        #Once we have a frame that contains the signal added from external sources, 
-        #we need to adjust these signals to account for detector effects (poisson
-        #noise, gain, and we need to add cosmic rays if requested. 
-        #Using the base image, multiply by exposure time and generate the collection
-        #of frames/groups that will form the final integration
-
-        yd,xd = frameimg.shape
-
-        #output variables
-        outimage = np.zeros((self.params['Readout']['ngroup'],yd,xd),dtype=np.float)
-        totalsignalimage = np.zeros_like(frameimg,dtype=np.float)
-        oldsignalimage = np.zeros_like(frameimg,dtype=np.float)
-        zframe = None
-
-        #read in gain map to be used below
-        if self.runStep['gain']:
-            gainim,gainhead = self.readCalFile(self.params['Reffiles']['gain'])
-            #set any NaN's to 1.0
-            bad = ~np.isfinite(gainim)
-            gainim[bad] = 1.0
-
-            #Pixels that have a gain value of 0 will be reset to have values of 1.0
-            zeros = gainim == 0
-            gainim[zeros] = 1.0
-
-        #read in non-linearity coefficients to be used later
-        if self.runStep['nonlin']:
-            nonlin,nonlinheader = self.readCalFile(self.params['Reffiles']['linearity'])
-            #set any NaN's to 0
-            bad = ~np.isfinite(nonlin)
-            nonlin[bad] = 0.
-
-        #set up functions to apply cosmic rays later
-        #Need the total number of active pixels in the output array to multiply the CR rate by
-        if self.runStep['cosmicray']:
-            npix = int(frameimg.shape[0]*frameimg.shape[1]+0.02)
-            crhits,crs_perframe = self.CRfuncs(npix)
-
-            #open output file to contain the list of cosmic rays
-            crlistout = self.params['Output']['file'][0:-5] + '_cosmicrays.list'
-            self.openCRListFile(crlistout,crhits)
-
-            #counter for use in cosmic ray addition while looping over frames
-            framenum = 0
-
-        #difference between the latest outimage frame and the latest newsignalimage frame
-        #This is important when nframe>1
-        delta = 0.
-
-        #Loop over each group
-        for i in range(self.params['Readout']['ngroup']):
-            accumimage=np.zeros_like(frameimg,dtype=np.int32)
-
-            #Loop over frames within each group if necessary
-            #create each frame
-            for j in range((self.params['Readout']['nframe']+self.params['Readout']['nskip'])):
-
-                #add poisson noise 
-                workimage = self.doPoisson(frameimg)
-                #print('poisson noise turned off for testing')
-                #workimage = np.copy(frameimg)
-
-                #add cosmic rays
-                #print('cosmic rays turned off for testing')
-                if self.runStep['cosmicray']:
-                    workimage = self.doCosmicRays(workimage,i,j,self.params['Readout']['nframe'],crs_perframe[framenum])
-                    framenum = framenum + 1
-
-                #apply the inverse gain to go from electrons to ADU
-                if self.runStep['gain']:
-                    invgainimage = 1./gainim
-                    workimage = workimage * invgainimage
-
-                #Adjust values that are above the saturation level. The non-linearity correction
-                #is only valid from 0 to the saturation level. Signals higher than this will
-                #a) produce garbage output from the non-lin function, and b) can be large enough
-                #to cause an overflow in the multiplication (i.e. the signal values are larger
-                #than the maximum 32-bit float value). Saturated pixels should have a value of 0
-                #in workimage, since workimage is added to totalsignalimage and it is the latter
-                #that is run through doNonLin.
-                #satpix = workimage > lin_satmap
-                #workimage[satpix] = 0.
-                
-                #introduce non-linearity into the ramps
-                if self.runStep['nonlin']:
-                    totalsignalimage = totalsignalimage + workimage
-                    newsignalimage = self.doNonLin(totalsignalimage,nonlin,self.satmap)
-
-                    #print('out of dononlin:',newsignalimage[799,803])
-
-                    workimage = newsignalimage - oldsignalimage
-                    oldsignalimage = np.copy(newsignalimage)
-
-                #Here is where we check to see which frame we are working on.
-                #If NSKIP != 0, then make sure we're working on a frame that is
-                #kept before proceeding. It's important to update totalsignalimage,
-                #newsignalimage, and old signalimage even for the frames that aren't kept.
-                #take this out-if j < self.params['Readout']['nframe']:
-
-                # now round off and truncate to integers, simulating the A/D conversion
-                # workimage is the signal accumulated in the current frame
-                #NOTE: any NaN values will be translated into -2147483648
-                workimage = np.around(workimage)
-                workimage = workimage.astype(np.int32)
-                    
-                #if the frame is one that is kept (one of the last nframe frames):
-                if j >= self.params['Readout']['nskip']:
-                    #if nframe is > 1, then we need to average the nframe frames and
-                    #place that into the group.
-                    if self.params['Readout']['nframe'] != 1:
-                        print('averaging frame {}'.format(i*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])+j))
-                        accumimage = accumimage + ((self.params['Readout']['nframe']-(j-self.params['Readout']['nskip']))*1./self.params['Readout']['nframe'])*workimage
-                    else:
-                        #if nframe=1, then no averaging is necessary
-                        #Is doing this faster than just using the averaging line above for nframe=1?
-                        print('adding frame {}'.format(i*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])+j))
-                        accumimage = accumimage + workimage
-                else:
-                    #frames that are skipped, according to nskip. The signal from these frames 
-                    #still must be included in the ramp, but not averaged into the group in the 
-                    #case where nframe is more than 1.
-                    print('skipping frame {}'.format(i*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])+j))
-                    accumimage = accumimage + workimage
-
-
-                #print('accumimage: ',accumimage[799,803])
-                #print('max,min values in accumimage ',np.nanmax(accumimage),np.nanmin(accumimage))
-                    
-                #if working on the zeroth frame, save for possible output
-                if ((i == 0) and (j == 0) and (self.dark.meta.exposure.readpatt == 'RAPID')):
-                    zframe = workimage
-                
-            #Now put the signal group into the output cube
-            accumimage=accumimage.astype(np.float)
-            if i > 0:
-                outimage[i,:,:] = outimage[i-1,:,:] + accumimage + delta
-            else:
-                outimage[i,:,:] = accumimage
-            #print('final output signal: ',outimage[i,799,803])
-            print("Group {} has been generated.".format(i+1))
-            #print('max,min values of finished group image ',np.max(outimage[i,:,:]),np.min(outimage[i,:,:]))
-
-            #Calculate the delta between outimage and the last iteration of newsignal. This needs to be
-            #added to the next iteration of outimage. (This is important for cases where nframe>1)
-            delta = newsignalimage - outimage[i,:,:]
-            #print('i = {}, delta = {}'.format(i+1,delta[799,803]))
-
-        if self.runStep['cosmicray']:
-            #close the cosmic ray list file
-            self.cosmicraylist.close()
-
-
-
-        #Look for pixels with crazy values. These are most likely due to the Newton's Method being
-        #used to insert the non-linearity failing to converge, probably from bad linearity coefficients
-        #or a bad initial guess. Set these pixels' signals to zero
-        bad = ((outimage < -100) | (outimage > 1e10))
-        badlast = ((outimage[-1,:,:] < -100) | (outimage[-1,:,:] > 1e10))
-        #outimage[bad] = 0.
-        numbad = np.sum(badlast)
-        yb,xb = outimage[-1,:,:].shape
-        print("Non-linearity added in to synthetic signal ramp. {} pixels in the final group, ({}% of the detector)".format(numbad,numbad*1./(xb*yb)))
-        print("have bad signal values. These will be set to 0 or 65535 when the integration is saved.")
-
-        nonconvmap = np.zeros_like(outimage)
-        nonconvmap[bad] = 1
-        if self.params['Output']['save_intermediates']:
-            h0 = fits.PrimaryHDU()
-            h1 = fits.ImageHDU(nonconvmap)
-            hl = fits.HDUList([h0,h1])
-            crazymap = self.params['Output']['file'][0:-5] + '_lin_nonconverging_pix.fits'
-            hl.writeto(crazymap,overwrite=True)
-            print("A map of these pixels has been saved to {}".format(crazymap))
-
-        return outimage,zframe
-
-    def linearizeDark(self,dark):
+    
+    def linearizeDark(self,darkobj):
         #Beginning with the input dark current ramp, run the dq_init, saturation, superbias
         #subtraction, refpix and nonlin pipeline steps in order to produce a linearized
         #version of the ramp. This will be used when combining the dark ramp with the 
@@ -1586,13 +1492,22 @@ class RampSim():
         from jwst.refpix import RefPixStep
         from jwst.linearity import LinearityStep
 
-        #Build 6
-        #from jwst_pipeline.dq_init import DQInitStep
-        #from jwst_pipeline.saturation import SaturationStep
-        #from jwst_pipeline.superbias import SuperBiasStep
-        #from jwst_pipeline.refpix import RefPixStep
-        #from jwst_pipeline.linearity import LinearityStep
+        print("data sent into linearize dark:")
+        print(darkobj.data[0,:,400,400])
+        
+        # First we need to place the read_fits object into a RampModel instance
+        if self.runStep['linearized_darkfile']:
+            subfile = self.params['Reffiles']['linearized_darkfile']
+        else:
+            subfile = self.params['Reffiles']['dark']
+        dark = darkobj.insert_into_datamodel(subfile)
 
+        print('subfile is {}'.format(subfile))
+
+        print("place in datamodel")
+        print(dark.data[0,:,400,400])
+
+        
         print('Creating a linearized version of the dark current input ramp.')
         
         #Run the DQ_Init step
@@ -1611,34 +1526,33 @@ class RampSim():
         else:
             linDark = SuperBiasStep.call(linDark,config_file=self.params['newRamp']['superbias_configfile'])
 
+        print("after superbias")
+        print(linDark.data[0,:,400,400])
 
         #save the refpix subtracted dark for testing
-        if self.params['Output']['save_intermediates']:
-            print('save the superbias-subtracted dark for testing')
-            h0=fits.PrimaryHDU()
-            h1 = fits.ImageHDU(linDark.data)
-            hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_sbSubbedDark.fits',overwrite=True)
-
+        #if self.params['Output']['save_intermediates']:
+        #    print('save the superbias-subtracted dark for testing')
+        #    h0=fits.PrimaryHDU()
+        #    h1 = fits.ImageHDU(linDark.data)
+        #    hl=fits.HDUList([h0,h1])
+        #    hl.writeto(self.params['Output']['file'][0:-5] + '_sbSubbedDark.fits',overwrite=True)
 
         #Reference pixel correction
         linDark = RefPixStep.call(linDark,config_file=self.params['newRamp']['refpix_configfile'])
 
-
         #save the sb and refpix subtracted dark for testing
-        if self.params['Output']['save_intermediates']:
-            print('save the sb and refpix subtracted dark for testing')
-            h0=fits.PrimaryHDU()
-            h1 = fits.ImageHDU(linDark.data)
-            hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_sbAndRefpixSubbedDark.fits',overwrite=True)
+        #if self.params['Output']['save_intermediates']:
+        #    print('save the sb and refpix subtracted dark for testing')
+        #    h0=fits.PrimaryHDU()
+        #    h1 = fits.ImageHDU(linDark.data)
+        #    hl=fits.HDUList([h0,h1])
+        #    hl.writeto(self.params['Output']['file'][0:-5] + '_sbAndRefpixSubbedDark.fits',overwrite=True)
 
 
         #save a copy of the superbias- and reference pixel-subtracted dark. This will be used later
         #to add these effects back in after the synthetic signals have been added and the non-linearity
         #effects are added back in when using the PROPER combine method.
-        if self.params['newRamp']['combine_method'].upper() in ['HIGHSIG','PROPER']:
-            sbAndRefpixEffects = dark.data - linDark.data
+        sbAndRefpixEffects = dark.data - linDark.data
 
         #Linearity correction - save the output so that you won't need to re-run the
         #pipeline when using the same dark current file in the future.
@@ -1649,15 +1563,29 @@ class RampSim():
         else:
             linDark = LinearityStep.call(linDark,config_file=self.params['newRamp']['linear_configfile'],output_file=linearoutfile)
 
+        print("after linearity correction")
+        print(linDark.data[0,:,400,400])
+
+            
         print('Linearized dark saved as {}'.format(linearoutfile))
-        return linDark,sbAndRefpixEffects
+
+        #Now we need to put the data back into a read_fits object
+        linDarkobj = read_fits.Read_fits()
+        linDarkobj.model = linDark
+        linDarkobj.rampmodel_to_obj()
+        linDarkobj.sbAndRefpix = sbAndRefpixEffects
+
+        print("placed back in fits_read object instance")
+        print(linDarkobj.data[0,:,400,400])
+        
+        return linDarkobj
 
         
-    def readLinearDark(self):
+    def readLinearDark_old(self):
         #Read in the linearized version of the dark current ramp
         try:
-            print('Reading in linearized dark current ramp from {}'.format(self.params['newRamp']['linearized_darkfile']))
-            self.linDark = RampModel(self.params['newRamp']['linearized_darkfile'])
+            print('Reading in linearized dark current ramp from {}'.format(self.params['Reffiles']['linearized_darkfile']))
+            self.linDark = RampModel(self.params['Reffiles']['linearized_darkfile'])
 
             #remove the non-pipeline keywords.
             self.linDark.__delattr__('extra_fits')
@@ -1675,11 +1603,121 @@ class RampSim():
 
         return zero
 
+    def create_group_entry(self,integration,groupnum,endday,endmilli,endsubmilli,endgroup,xd,yd,gap,comp_code,comp_text,barycentric,heliocentric):
+        #add the GROUP extension to the output file
 
+        #from an example Mark Kyprianou sent:
+        #integration_number, group_number - integers
+        #end_day - integer (e.g. 5861) days since Jan 1 2000
+        #end_milliseconds - integer (e.g. 9806061) milliseconds of the day
+        #end_submilliseconds - integer (e.g 177) since last millisecond?
+        #group_end_time e.g. '2016-01-18T02:43:26.061'
+        #number_of_columns 2048
+        #number_of_rows 2048
+        #number_of_gaps 0 gaps in telemetry
+        #completion_code_number 0 (nominal?)
+        #Completion_code_text 'COMPLETE'-from howard
+        #                     'Normal Completion' - from mark
+        #bary_end_time (mjd) 57405.11165225
+        #helio_end_time (mjd) 57405.1163058
+        
+        
+        group = np.ndarray(
+            (1, ),
+            dtype=[
+                ('integration_number', '<i2'),
+                ('group_number', '<i2'),
+                ('end_day', '<i2'),
+                ('end_milliseconds', '<i4'),
+                ('end_submilliseconds', '<i2'),
+                ('group_end_time', 'S26'),
+                ('number_of_columns', '<i2'),
+                ('number_of_rows', '<i2'),
+                ('number_of_gaps', '<i2'),
+                ('completion_code_number', '<i2'),
+                ('completion_code_text', 'S36'),
+                ('bary_end_time', '<f8'),
+                ('helio_end_time', '<f8')
+            ]
+        )
+        group[0]['integration_number'] = integration
+        group[0]['group_number'] = groupnum
+        group[0]['end_day'] = endday
+        group[0]['end_milliseconds'] = endmilli
+        group[0]['end_submilliseconds'] = endsubmilli
+        group[0]['group_end_time'] = endgroup
+        group[0]['number_of_columns'] = xd
+        group[0]['number_of_rows'] = yd
+        group[0]['number_of_gaps'] = gap
+        group[0]['completion_code_number'] = comp_code
+        group[0]['completion_code_text'] = comp_text
+        group[0]['bary_end_time'] = barycentric
+        group[0]['helio_end_time'] = heliocentric        
+        return group
+
+    
+    def populate_group_table(self,starttime,grouptime,ramptime,numint,numgroup,ny,nx):
+        #create some reasonable values to fill the GROUP extension table.
+        #These will not be completely correct because access to other ssb
+        #scripts and more importantly, databses, is necessary. But they should be
+        #close.
+
+        print("Going in to populate_group_table:")
+        print(starttime,grouptime,ramptime,numint,numgroup,ny,nx)
+        
+        #Create the table with a first row populated by garbage
+        grouptable = self.create_group_entry(999,999,0,0,0,'void',0,0,0,0,'void',1.,1.)
+        
+        #Fixed for all exposures
+        compcode = 0
+        comptext = 'Normal Completion'
+        numgap = 0
+        baseday = Time('2000-01-01T00:00:00')
+        
+        #integration start times
+        rampdelta = TimeDelta(ramptime,format='sec')
+        groupdelta = TimeDelta(grouptime,format='sec')
+        intstarts = starttime + (np.arange(numint)*rampdelta)
+        
+        for integ in range(numint):
+            groups = np.arange(1,numgroup+1)
+            groupends = intstarts[integ] + (np.arange(1,numgroup+1)*groupdelta)
+            endday = (groupends - baseday).jd
+            enddayint = [np.int(s) for s in endday]
+
+            #now to get end_milliseconds, we need milliseconds from the beginning
+            #of the day
+            inday = TimeDelta(endday - enddayint,format='jd')
+            endmilli = inday.sec * 1000.
+
+            #submilliseconds - just use a random number
+            endsubmilli = np.random.randint(0,1000,len(endmilli))
+
+            #group end time. need to remove : and - and make lowercase t
+            #gstr = groupends.isot
+            groupending = groupends.isot
+            #groupending = [s.replace(':','').replace('-','').lower() for s in gstr]
+
+            #approximate these as just the group end time in mjd
+            barycentric = groupends.mjd
+            heliocentric = groupends.mjd
+
+            for grp,day,milli,submilli,grpstr,bary,helio in zip(groups,endday,endmilli,endsubmilli,groupending,barycentric,heliocentric):
+                entry = self.create_group_entry(integ+1,grp,day,milli,submilli,grpstr,nx,ny,numgap,compcode,comptext,bary,helio)
+                grouptable = np.vstack([grouptable,entry])
+
+        # Now remove the top garbage row from the table
+        grouptable = grouptable[1:]
+        return grouptable
+                
+    
     def saveDMS(self,ramp,zeroframe,filename):
         #save the new, simulated integration in DMS format (i.e. DMS orientation 
         #rather than raw fitswriter orientation, and using SSBs RampModel)
-        
+
+        from jwst.datamodels import Level1bModel
+        outModel = Level1bModel()
+
         #make sure the ramp to be saved has the right number of dimensions
         imshape = ramp.shape
         if len(imshape) == 3:
@@ -1689,15 +1727,7 @@ class RampSim():
         ramp[toohigh] = 65535
             
         #insert data into model
-        self.dark.data = ramp.astype(np.uint16)
-        self.dark.err = np.zeros_like(ramp,dtype=np.uint16)
-        self.dark.groupdq = np.zeros_like(ramp,dtype=np.uint8)
-
-        if len(self.dark.err.shape) == 3:
-            self.dark.err = np.expand_dims(self.dark.err,axis=0)
-
-        if len(self.dark.groupdq.shape) == 3:
-            self.dark.groupdq = np.expand_dims(self.dark.groupdq,axis=0)
+        outModel.data = ramp.astype(np.uint16)
 
         #if saving the zeroth frame is requested, insert into the model instance
         if zeroframe is not None:
@@ -1706,13 +1736,13 @@ class RampSim():
             if len(zeroframe.shape) == 2:
                 zeroframe = np.expand_dims(zeroframe,0)
                 #place the zero frame into the model
-                self.dark.zeroframe = zeroframe.astype(np.uint16)
+                outModel.zeroframe = zeroframe.astype(np.uint16)
             elif len(zeroframe.shape) == 3:
-                self.dark.zeroframe = zeroframe.astype(np.uint16)
+                outModel.zeroframe = zeroframe.astype(np.uint16)
         else:
             print("Zeroframe not present. Setting to all zeros")
             numint,numgroup,ys,xs = ramp.shape
-            self.dark.zeroframe = np.zeros((numint,ys,xs))
+            outModel.zeroframe = np.zeros((numint,ys,xs))
                 
         #EXPTYPE OPTIONS
         #exptypes = ['NRC_IMAGE','NRC_GRISM','NRC_TACQ','NRC_CORON','NRC_DARK','NRC_TSIMAGE','NRC_TSGRISM']
@@ -1721,105 +1751,89 @@ class RampSim():
         exptype = {'imaging':'NRC_IMAGE','moving_target':'NRC_TSIMAGE','wfss':'NRC_GRISM','tso_wfss':'NRC_TSGRISM','coron':'NRC_CORON'}
 
         try:
-            self.dark.meta.exposure.type = exptype[self.params['Inst']['mode'].lower()]
+            outModel.meta.exposure.type = exptype[self.params['Inst']['mode'].lower()]
         except:
             print('EXPTYPE mapping not complete for this!!! FIX ME!')
             sys.exit()
 
         #update various header keywords
-        dims = self.dark.data.shape
+        dims = outModel.data.shape
         dtor = math.radians(1.)
         pixelsize = self.pixscale[0] / 3600.0
 
         current_time = datetime.datetime.utcnow()
-        #ct = Time(current_time)
-        print(self.params['Output']['date_obs'])
-        print(self.params['Output']['time_obs'])
         start_time_string = self.params['Output']['date_obs'] + 'T' + self.params['Output']['time_obs']
         ct = Time(start_time_string)
-        #reference_time = datetime.datetime(2000,1,1,0,0,0)
-        #delta = current_time-reference_time
-        #et = delta.total_seconds()
-        #hmjd = 51544.5 + et/86400.0
-        #self.dark.meta.date = current_time.strftime('%Y-%m-%dT%H:%M:%S')
 
-        self.dark.meta.date = start_time_string
-        self.dark.meta.telescope = 'JWST'
+        outModel.meta.date = start_time_string
+        outModel.meta.telescope = 'JWST'
+        outModel.meta.instrument.name = self.params['Inst']['instrument'].upper()
+        outModel.meta.instrument.module = self.detector[3]
+
+        channel = 'SHORT'
+        if 'LONG' in self.detector:
+            channel = 'LONG'
+        outModel.meta.instrument.channel = channel
+        outModel.meta.instrument.detector = self.detector
+        outModel.meta.coordinates.reference_frame = 'ICRS'
+
+        outModel.meta.subarray.fastaxis = self.fastaxis
+        outModel.meta.subarray.slowaxis = self.slowaxis
         
-        self.dark.meta.instrument.name = self.params['Inst']['instrument'].upper()
-        self.dark.meta.coordinates.reference_frame = 'ICRS'
-
-        self.dark.meta.origin = 'STScI'
-        self.dark.meta.filename = filename
-        self.dark.meta.filetype = 'raw'
-        self.dark.meta.observation.obs_id = self.params['Output']['obs_id']
-        self.dark.meta.observation.visit_id = self.params['Output']['visit_id']
-        self.dark.meta.observation.visit_number = self.params['Output']['visit_number']
-        self.dark.meta.observation.program_number = self.params['Output']['program_number']
-        self.dark.meta.observation.observation_number = self.params['Output']['observation_number']
-        self.dark.meta.observation.observation_label = self.params['Output']['observation_label']
-        self.dark.meta.observation.visit_group = self.params['Output']['visit_group']
-        self.dark.meta.observation.sequence_id = self.params['Output']['sequence_id']
-        self.dark.meta.observation.activity_id =self.params['Output']['activity_id']
-        self.dark.meta.observation.exposure_number = self.params['Output']['exposure_number']
+        outModel.meta.origin = 'STScI'
+        outModel.meta.filename = filename
+        outModel.meta.filetype = 'raw'
+        outModel.meta.observation.obs_id = self.params['Output']['obs_id']
+        outModel.meta.observation.visit_id = self.params['Output']['visit_id']
+        outModel.meta.observation.visit_number = self.params['Output']['visit_number']
+        outModel.meta.observation.program_number = self.params['Output']['program_number']
+        outModel.meta.observation.observation_number = self.params['Output']['observation_number']
+        outModel.meta.observation.observation_label = self.params['Output']['observation_label']
+        outModel.meta.observation.visit_group = self.params['Output']['visit_group']
+        outModel.meta.observation.sequence_id = self.params['Output']['sequence_id']
+        outModel.meta.observation.activity_id =self.params['Output']['activity_id']
+        outModel.meta.observation.exposure_number = self.params['Output']['exposure_number']
     
-        self.dark.meta.program.pi_name = self.params['Output']['PI_Name']
-        self.dark.meta.program.title = self.params['Output']['title']
-        self.dark.meta.program.category = self.params['Output']['Proposal_category']
-        self.dark.meta.program.sub_category = 'UNKNOWN'
-        self.dark.meta.program.science_category = self.params['Output']['Science_category']
-        self.dark.meta.program.continuation_id = 0
+        outModel.meta.program.pi_name = self.params['Output']['PI_Name']
+        outModel.meta.program.title = self.params['Output']['title']
+        outModel.meta.program.category = self.params['Output']['Proposal_category']
+        outModel.meta.program.sub_category = 'UNKNOWN'
+        outModel.meta.program.science_category = self.params['Output']['Science_category']
+        outModel.meta.program.continuation_id = 0
 
-        self.dark.meta.target.catalog_name = 'UNKNOWN'
+        outModel.meta.target.catalog_name = 'UNKNOWN'
 
-        self.dark.meta.wcsinfo.wcsaxes = 2
-        self.dark.meta.wcsinfo.crval1 = self.ra
-        self.dark.meta.wcsinfo.crval2 = self.dec
-        self.dark.meta.wcsinfo.crpix1 = self.refpix_pos['x']+1. 
-        self.dark.meta.wcsinfo.crpix2 = self.refpix_pos['y']+1.
-        self.dark.meta.wcsinfo.ctype1 = 'RA---TAN'
-        self.dark.meta.wcsinfo.ctype2 = 'DEC--TAN'
-        self.dark.meta.wcsinfo.cunit1 = 'deg' 
-        self.dark.meta.wcsinfo.cunit2 = 'deg'
-        self.dark.meta.wcsinfo.v2_ref = self.v2_ref
-        self.dark.meta.wcsinfo.v3_ref = self.v3_ref
-        self.dark.meta.wcsinfo.vparity = self.parity
-        self.dark.meta.wcsinfo.v3yangle = self.v3yang
-        self.dark.meta.wcsinfo.cdelt1 = self.xsciscale / 3600.
-        self.dark.meta.wcsinfo.cdelt2 = self.ysciscale / 3600.
-        #roll_ref = set_telescope_pointing.compute_local_roll(self.params['Telescope']['rotation'],self.ra,self.dec,self.v2_ref,self.v3_ref)
-        self.dark.meta.wcsinfo.roll_ref = self.local_roll
-        
-        self.dark.meta.target.ra = self.ra
-        self.dark.meta.target.dec = self.dec
+        outModel.meta.wcsinfo.wcsaxes = 2
+        outModel.meta.wcsinfo.crval1 = self.ra
+        outModel.meta.wcsinfo.crval2 = self.dec
+        outModel.meta.wcsinfo.crpix1 = self.refpix_pos['x']+1. 
+        outModel.meta.wcsinfo.crpix2 = self.refpix_pos['y']+1.
+        outModel.meta.wcsinfo.ctype1 = 'RA---TAN'
+        outModel.meta.wcsinfo.ctype2 = 'DEC--TAN'
+        outModel.meta.wcsinfo.cunit1 = 'deg' 
+        outModel.meta.wcsinfo.cunit2 = 'deg'
+        outModel.meta.wcsinfo.v2_ref = self.v2_ref
+        outModel.meta.wcsinfo.v3_ref = self.v3_ref
+        outModel.meta.wcsinfo.vparity = self.parity
+        outModel.meta.wcsinfo.v3yangle = self.v3yang
+        outModel.meta.wcsinfo.cdelt1 = self.xsciscale / 3600.
+        outModel.meta.wcsinfo.cdelt2 = self.ysciscale / 3600.
+        outModel.meta.wcsinfo.roll_ref = self.local_roll        
+        outModel.meta.target.ra = self.ra
+        outModel.meta.target.dec = self.dec
 
         #ra_v1, dec_v1, and pa_v3 are not used by the level 2 pipelines
-        self.dark.meta.pointing.ra_v1 = self.ra
-        self.dark.meta.pointing.dec_v1 = self.dec
-        self.dark.meta.pointing.pa_v3 = self.params['Telescope']['rotation']
+        outModel.meta.pointing.ra_v1 = self.ra
+        outModel.meta.pointing.dec_v1 = self.dec
+        outModel.meta.pointing.pa_v3 = self.params['Telescope']['rotation']
 
         ramptime = self.frametime*(1+self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
         #Add time for the reset frame....
         rampexptime = self.frametime * (self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
 
-        # elapsed time from the end and from the start of the supposid ramp, in seconds
-        # put the end of the ramp 1 second before the time the file is written
-        # these only go in the fake ramp, not in the signal images....
-        #deltatend = datetime.timedelta(0,1.)
-        #deltatstart = datetime.timedelta(0,1.+ramptime)
-        #tend = current_time - deltatend
-        #tstart = current_time - deltatstart
-        #self.dark.meta.observation.date = tstart.strftime('%Y-%m-%d')
-        self.dark.meta.observation.date = self.params['Output']['date_obs']
-        #str1 = str(int(tstart.microsecond/1000.))
-        #str2 = tstart.strftime('%H:%M:%S.')+str1
-        #self.dark.meta.observation.time = str2
-        self.dark.meta.observation.time = self.params['Output']['time_obs']
-        #str1 = str(int(tend.microsecond/1000.))
-        #str2 = tend.strftime('%H:%M:%S.')+str1
+        outModel.meta.observation.date = self.params['Output']['date_obs']
+        outModel.meta.observation.time = self.params['Output']['time_obs']
 
-        #Hmmm. Do we need a file with filter/pupil combos? Or should we rely
-        #on the user to enter the correct values in the parameter file?
         if self.runStep['fwpw']:
             fwpw = ascii.read(self.params['Reffiles']['filtpupilcombo'])
         else:
@@ -1840,92 +1854,286 @@ class RampSim():
             fw = self.params['Readout']['filter']
             #grism = pw
             
-        #since we are saving in DMS format, we can use the RampModel instance
-        #that is self.dark, modify values, and save
-        self.dark.meta.instrument.filter = fw
-        self.dark.meta.instrument.pupil = pw
-        #self.dark.meta.instrument.grating = grism
+        outModel.meta.instrument.filter = fw
+        outModel.meta.instrument.pupil = pw
 
-        self.dark.meta.dither.primary_type = self.params['Output']['primary_dither_type']
-        self.dark.meta.dither.position_number = self.params['Output']['primary_dither_position']
-        self.dark.meta.dither.total_points = str(self.params['Output']['total_primary_dither_positions'])
-        self.dark.meta.dither.pattern_size = 0.0
-        self.dark.meta.dither.subpixel_type = self.params['Output']['subpix_dither_type']
-        self.dark.meta.dither.subpixel_number = self.params['Output']['subpix_dither_position']
-        self.dark.meta.dither.subpixel_total_points = self.params['Output']['total_subpix_dither_positions']
-        self.dark.meta.dither.xoffset = self.params['Output']['xoffset']
-        self.dark.meta.dither.yoffset = self.params['Output']['yoffset']
+        outModel.meta.dither.primary_type = self.params['Output']['primary_dither_type']
+        outModel.meta.dither.position_number = self.params['Output']['primary_dither_position']
+        outModel.meta.dither.total_points = str(self.params['Output']['total_primary_dither_positions'])
+        outModel.meta.dither.pattern_size = 0.0
+        outModel.meta.dither.subpixel_type = self.params['Output']['subpix_dither_type']
+        outModel.meta.dither.subpixel_number = self.params['Output']['subpix_dither_position']
+        outModel.meta.dither.subpixel_total_points = self.params['Output']['total_subpix_dither_positions']
+        outModel.meta.dither.xoffset = self.params['Output']['xoffset']
+        outModel.meta.dither.yoffset = self.params['Output']['yoffset']
 
         # pixel coordinates in FITS header start from 1 not from 0
         xc=(self.subarray_bounds[2]+self.subarray_bounds[0])/2.+1.
         yc=(self.subarray_bounds[3]+self.subarray_bounds[1])/2.+1.
 
-        self.dark.meta.exposure.readpatt = self.params['Readout']['readpatt']
+        outModel.meta.exposure.readpatt = self.params['Readout']['readpatt']
 
         #The subarray name needs to come from the "Name" column in the 
         #subarray definitions dictionary
         mtch = self.subdict["AperName"] == self.params["Readout"]['array_name']
-        self.dark.meta.subarray.name = str(self.subdict["Name"].data[mtch][0])
-        #self.dark.meta.subarray.name = self.params['Readout']['array_name']
+        outModel.meta.subarray.name = str(self.subdict["Name"].data[mtch][0])
         
         #subarray_bounds indexed to zero, but values in header should be
         #indexed to 1.
-        self.dark.meta.subarray.xstart = self.subarray_bounds[0]+1
-        self.dark.meta.subarray.ystart = self.subarray_bounds[1]+1
-        self.dark.meta.subarray.xsize = self.subarray_bounds[2]-self.subarray_bounds[0]+1
-        self.dark.meta.subarray.ysize = self.subarray_bounds[3]-self.subarray_bounds[1]+1
+        outModel.meta.subarray.xstart = self.subarray_bounds[0]+1
+        outModel.meta.subarray.ystart = self.subarray_bounds[1]+1
+        outModel.meta.subarray.xsize = self.subarray_bounds[2]-self.subarray_bounds[0]+1
+        outModel.meta.subarray.ysize = self.subarray_bounds[3]-self.subarray_bounds[1]+1
 
         nlrefpix = max(4-self.subarray_bounds[0],0)
         nbrefpix = max(4-self.subarray_bounds[1],0)
         nrrefpix=max(self.subarray_bounds[2]-(self.ffsize-4),0)
         ntrefpix=max(self.subarray_bounds[3]-(self.ffsize-4),0)
 
-        self.dark.meta.exposure.nframes = self.params['Readout']['nframe']
-        self.dark.meta.exposure.ngroups = self.params['Readout']['ngroup']
-        self.dark.meta.exposure.nints = self.params['Readout']['nint']
+        outModel.meta.exposure.nframes = self.params['Readout']['nframe']
+        outModel.meta.exposure.ngroups = self.params['Readout']['ngroup']
+        outModel.meta.exposure.nints = self.params['Readout']['nint']
 
-        self.dark.meta.exposure.sample_time = 10
-        self.dark.meta.exposure.frame_time = self.frametime 
-        self.dark.meta.exposure.group_time = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
-        self.dark.meta.exposure.groupgap = self.params['Readout']['nskip']
+        outModel.meta.exposure.sample_time = 10
+        outModel.meta.exposure.frame_time = self.frametime 
+        outModel.meta.exposure.group_time = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
+        outModel.meta.exposure.groupgap = self.params['Readout']['nskip']
 
-        self.dark.meta.exposure.nresets_at_start = 1
-        self.dark.meta.exposure.nresets_between_ints = 1
-        self.dark.meta.exposure.integration_time = rampexptime
-        self.dark.meta.exposure.exposure_time = rampexptime * self.params['Readout']['nint']
+        outModel.meta.exposure.nresets_at_start = 1
+        outModel.meta.exposure.nresets_between_ints = 1
+        outModel.meta.exposure.integration_time = rampexptime
+        outModel.meta.exposure.exposure_time = rampexptime * self.params['Readout']['nint']
 
-        #set the exposure start time as the current time
-        self.dark.meta.exposure.start_time = ct.mjd
-        self.dark.meta.exposure.end_time = ct.mjd + self.dark.meta.exposure.exposure_time/3600./24.
-        self.dark.meta.exposure.mid_time = ct.mjd + self.dark.meta.exposure.exposure_time/3600./24./2.
+        #set the exposure start time 
+        outModel.meta.exposure.start_time = ct.mjd
+        endingTime = ct.mjd + outModel.meta.exposure.exposure_time/3600./24.
+        outModel.meta.exposure.end_time = endingTime
+        outModel.meta.exposure.mid_time = ct.mjd + outModel.meta.exposure.exposure_time/3600./24./2.
+        outModel.meta.exposure.duration = ramptime
 
-        self.dark.meta.exposure.duration = ramptime
+        #populate the GROUP extension table
+        n_int,n_group,n_y,n_x = outModel.data.shape
+        outModel.group = self.populate_group_table(ct,outModel.meta.exposure.group_time,rampexptime,n_int,n_group,n_y,n_x)
 
-        self.dark.save(filename)
+        outModel.save(filename)
 
-        #now, because the ramp model saves the data and error arrays
-        #as 32-bit floats when the original raw data will be 16 bit
-        #integers, open the output file using astropy and adjust
-        hh = fits.open(filename)
-        for e in [1,4,5]:
-            hh[e].data = hh[e].data.astype(np.uint16)  
-
-        #also, to simulate more exactly the level 1b output files
-        #we need to remove the error, pixeldq, and groupdq extensions
-        #so let's keep only the primary, sci, and zeroframe extensions
-        h1b_0 = hh[0]
-        h1b_1 = hh[1]
-        h1b_5 = hh[5]
-        newhlist = fits.HDUList([h1b_0,h1b_1,h1b_5])
-        newhlist.writeto(filename,overwrite=True)
-        hh.close()
-      
-        #hh.writeto(filename,overwrite=True)
-        
         print("Final output integration saved to {}".format(filename))
         return
 
+    
+    def savefits(self,ramp,zeroframe,filename):
+        #save the new, simulated integration in DMS format (i.e. DMS orientation 
+        #rather than raw fitswriter orientation, and using SSBs RampModel)
+        
+        #make sure the ramp to be saved has the right number of dimensions
+        imshape = ramp.shape
+        if len(imshape) == 3:
+            ramp = np.expand_dims(ramp,axis=0)
 
+        toohigh = ramp > 65535
+        ramp[toohigh] = 65535
+            
+        #if saving the zeroth frame is requested, insert into the model instance
+        if zeroframe is not None:
+            #if the zeroframe is a 2D image, then add a dimension
+            if len(zeroframe.shape) == 2:
+                zeroframe = np.expand_dims(zeroframe,0)
+        else:
+            print("Zeroframe not present. Setting to all zeros")
+            numint,numgroup,ys,xs = ramp.shape
+
+        #place the arrays in the correct extensions of the HDUList
+        ex0 = fits.PrimaryHDU()
+        ex1 = fits.ImageHDU(ramp.astype(np.int16),name='SCI')
+        ex2 = fits.ImageHDU(zeroframe.astype(np.int16),name='ZEROFRAME')
+        ex3 = fits.BinTableHDU(name='GROUP')
+        outModel = fits.HDUList([ex0,ex1,ex2,ex3])
+
+        #self.dark[1].data = ramp.astype(np.uint16) 
+        #self.dark[2].data = zeroframe.astype(np.uint16) 
+
+        #if there are other extensions, remove them
+        #if len(self.dark) > 3:
+        #    self.dark = self.dark[0:3]
+        
+        #EXPTYPE OPTIONS
+        exptype = {'imaging':'NRC_IMAGE','moving_target':'NRC_TSIMAGE','wfss':'NRC_GRISM','tso_wfss':'NRC_TSGRISM','coron':'NRC_CORON'}
+        try:
+            outModel[0].header['EXP_TYPE'] = exptype[self.params['Inst']['mode'].lower()]
+        except:
+            print('EXPTYPE mapping not complete for this!!! FIX ME!')
+            sys.exit()
+
+        #update various header keywords
+        dims = outModel[1].data.shape
+        dtor = math.radians(1.)
+        pixelsize = self.pixscale[0] / 3600.0
+
+        current_time = datetime.datetime.utcnow()
+        start_time_string = self.params['Output']['date_obs'] + 'T' + self.params['Output']['time_obs']
+        ct = Time(start_time_string)
+
+        outModel[0].header['DATE'] = start_time_string
+        outModel[0].header['TELESCOP'] = 'JWST'
+        
+        outModel[0].header['INSTRUME'] = self.params['Inst']['instrument'].upper()
+        outModel[0].header['DETECTOR'] = self.detector
+        outModel[0].header['MODULE'] = self.detector[3]
+
+        channel = 'SHORT'
+        if 'LONG' in self.detector:
+            channel = 'LONG'
+        outModel[0].header['CHANNEL'] - channel
+        outModel[0].header['FASTAXIS'] = self.fastaxis
+        outModel[0].header['SLOWAXIS'] = self.slowaxis
+
+        outModel[0].header['RADESYS'] = 'ICRS'
+
+        outModel[0].header['ORIGIN'] = 'STScI'
+        outModel[0].header['FILENAME'] = filename
+        outModel[0].header['FILETYPE'] = 'raw'
+        outModel[0].header['OBS_ID'] = self.params['Output']['obs_id'] 
+        outModel[0].header['VISIT_ID'] = self.params['Output']['visit_id'] 
+        outModel[0].header['VISIT'] = self.params['Output']['visit_number']
+        outModel[0].header['PROGRAM'] = self.params['Output']['program_number']
+        outModel[0].header['OBSERVTN'] = self.params['Output']['observation_number']
+        outModel[0].header['OBSLABEL'] = self.params['Output']['observation_label']
+        outModel[0].header['VISITGRP'] = self.params['Output']['visit_group']
+        outModel[0].header['SEQ_ID'] = self.params['Output']['sequence_id']
+        outModel[0].header['ACT_ID'] = self.params['Output']['activity_id']
+        outModel[0].header['EXPOSURE'] = self.params['Output']['exposure_number']
+    
+        outModel[0].header['PI_NAME'] = self.params['Output']['PI_Name']
+        outModel[0].header['TITLE'] = self.params['Output']['title']
+        outModel[0].header['CATEGORY'] = self.params['Output']['Proposal_category']
+        outModel[0].header['SUBCAT'] = 'UNKNOWN'
+        outModel[0].header['SCICAT'] = self.params['Output']['Science_category']
+        outModel[0].header['CONT_ID'] = 0
+
+        outModel[0].header['TARGNAME'] = 'UNKNOWN'
+
+        outModel[0].header['WCSAXES'] = 2
+        outModel[0].header['CRVAL1'] = self.ra
+        outModel[0].header['CRVAL2'] = self.dec
+        outModel[0].header['CRPIX1'] = self.refpix_pos['x']+1. 
+        outModel[0].header['CRPIX2'] = self.refpix_pos['y']+1.
+        outModel[0].header['CTYPE1'] = 'RA---TAN'
+        outModel[0].header['CTYPE2'] = 'DEC--TAN'
+        outModel[0].header['CUNIT1'] = 'deg' 
+        outModel[0].header['CUNIT2'] = 'deg'
+        outModel[0].header['V2_REF'] = self.v2_ref
+        outModel[0].header['V3_REF'] = self.v3_ref
+        outModel[0].header['VPARITY'] = self.parity
+        outModel[0].header['V3I_YANG'] = self.v3yang
+        outModel[0].header['CDELT1'] = self.xsciscale / 3600.
+        outModel[0].header['CDELT2'] = self.ysciscale / 3600.
+        outModel[0].header['ROLL_REF'] = self.local_roll
+        
+        outModel[0].header['TARG_RA'] = self.ra #not correct
+        outModel[0].header['TARG_DEC'] = self.dec #not correct
+
+        #ra_v1, dec_v1, and pa_v3 are not used by the level 2 pipelines
+        outModel[0].header['RA_V1'] = self.ra
+        outModel[0].header['DEC_V1'] = self.dec
+        outModel[0].header['PA_V3'] = self.params['Telescope']['rotation']
+
+        ramptime = self.frametime*(1+self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
+        #Add time for the reset frame....
+        rampexptime = self.frametime * (self.params['Readout']['ngroup']*(self.params['Readout']['nframe']+self.params['Readout']['nskip']))
+
+        # elapsed time from the end and from the start of the supposid ramp, in seconds
+        # put the end of the ramp 1 second before the time the file is written
+        # these only go in the fake ramp, not in the signal images....
+        outModel[0].header['DATE-OBS'] = self.params['Output']['date_obs']
+        outModel[0].header['TIME-OBS'] = self.params['Output']['time_obs']
+
+        #Hmmm. Do we need a file with filter/pupil combos? Or should we rely
+        #on the user to enter the correct values in the parameter file?
+        if self.runStep['fwpw']:
+            fwpw = ascii.read(self.params['Reffiles']['filtpupilcombo'])
+        else:
+            print("WARNING: Filter wheel element/pupil wheel element combo reffile not specified. Proceeding by")
+            print("saving {} in FILTER keyword, and {} in PUPIL keyword".format(self.params['Readout']['filter'],self.params['Readout']['pupil']))
+            fwpw = Table()
+            fwpw['filter_wheel'] = self.params['Readout']['filter']
+            fwpw['pupil_wheel'] = self.params['Readout']['pupil']
+
+        #get the proper filter wheel and pupil wheel values for the header
+        if self.params['Inst']['mode'].lower() != 'wfss':
+            mtch = fwpw['filter'] == self.params['Readout']['filter'].upper()
+            fw = str(fwpw['filter_wheel'].data[mtch][0])
+            pw = str(fwpw['pupil_wheel'].data[mtch][0])
+        else:
+            pw = self.params['Readout']['pupil']
+            fw = self.params['Readout']['filter']
+            
+        outModel[0].header['FILTER'] = fw
+        outModel[0].header['PUPIL'] = pw
+
+        outModel[0].header['PATTTYPE'] = self.params['Output']['primary_dither_type']
+        outModel[0].header['PATT_NUM'] = self.params['Output']['primary_dither_position']
+        outModel[0].header['NUMDTHPT'] = str(self.params['Output']['total_primary_dither_positions'])
+        outModel[0].header['PATTSIZE'] = 0.0
+        outModel[0].header['SUBPXTYP'] = self.params['Output']['subpix_dither_type']
+        outModel[0].header['SUBPXNUM'] = self.params['Output']['subpix_dither_position']
+        outModel[0].header['SUBPXPNS'] = self.params['Output']['total_subpix_dither_positions']
+        outModel[0].header['XOFFSET'] = self.params['Output']['xoffset']
+        outModel[0].header['YOFFSET'] = self.params['Output']['yoffset']
+
+        # pixel coordinates in FITS header start from 1 not from 0
+        xc=(self.subarray_bounds[2]+self.subarray_bounds[0])/2.+1.
+        yc=(self.subarray_bounds[3]+self.subarray_bounds[1])/2.+1.
+
+        outModel[0].header['READPATT'] = self.params['Readout']['readpatt']
+
+        #The subarray name needs to come from the "Name" column in the 
+        #subarray definitions dictionary
+        mtch = self.subdict["AperName"] == self.params["Readout"]['array_name']
+        outModel[0].header['SUBARRAY'] = str(self.subdict["Name"].data[mtch][0])
+        
+        #subarray_bounds indexed to zero, but values in header should be
+        #indexed to 1.
+        outModel[0].header['SUBSTRT1'] = self.subarray_bounds[0]+1
+        outModel[0].header['SUBSTRT2'] = self.subarray_bounds[1]+1
+        outModel[0].header['SUBSIZE1'] = self.subarray_bounds[2]-self.subarray_bounds[0]+1
+        outModel[0].header['SUBSIZE2'] = self.subarray_bounds[3]-self.subarray_bounds[1]+1
+
+        nlrefpix = max(4-self.subarray_bounds[0],0)
+        nbrefpix = max(4-self.subarray_bounds[1],0)
+        nrrefpix=max(self.subarray_bounds[2]-(self.ffsize-4),0)
+        ntrefpix=max(self.subarray_bounds[3]-(self.ffsize-4),0)
+
+        outModel[0].header['NFRAMES'] = self.params['Readout']['nframe']
+        outModel[0].header['NGROUPS'] = self.params['Readout']['ngroup']
+        outModel[0].header['NINTS'] = self.params['Readout']['nint']
+
+        outModel[0].header['TSAMPLE'] = 10
+        outModel[0].header['TFRAME'] = self.frametime 
+        outModel[0].header['TGROUP'] = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
+        outModel[0].header['GROUPGAP'] = self.params['Readout']['nskip']
+
+        outModel[0].header['NRSTSTRT'] = 1
+        outModel[0].header['NRESETS'] = 1
+        outModel[0].header['EFFINTTM'] = rampexptime
+        outModel[0].header['EFFEXPTM'] = rampexptime * self.params['Readout']['nint']
+
+        #set the exposure start time as the current time
+        outModel[0].header['EXPSTART'] = ct.mjd
+        outModel[0].header['EXPEND'] = ct.mjd + outModel[0].header['EFFEXPTM']/3600./24.
+        outModel[0].header['EXPMID'] = ct.mjd + outModel[0].header['EFFEXPTM']/3600./24./2.
+
+        outModel[0].header['DURATION'] = ramptime
+
+        #populate the GROUP extension table
+        n_int,n_group,n_y,n_x = outModel[1].data.shape
+        outModel[3].data = self.populate_group_table(ct,outModel[0].header['TGROUP'],rampexptime,n_int,n_group,n_y,n_x)
+        
+        outModel.writeto(filename,overwrite=True)
+
+        print("Final output integration saved to {}".format(filename))
+        return
+
+    
     def readCRFiles(self):
         #read in the 10 files that comprise the cosmic ray library
         self.cosmicrays=[]
@@ -1962,7 +2170,6 @@ class RampSim():
             zs = gainim == 0
             gainim[zs] = 1.0
 
-
         mod_ramp = copy(ramp)
         for integ in range(self.params['Readout']['nint']):
 
@@ -1996,18 +2203,17 @@ class RampSim():
                 mod_ramp /= gainim
 
             #save the updated zero frame
-            if integ == 0:
-                zero = np.copy(mod_ramp[0,:,:]) + crs_only_zero
+            #if integ == 0: #with this line in place, all integrations have same zeroframe
+            zero = np.copy(mod_ramp[0,:,:]) + crs_only_zero
 
-            #save simulated signal ramp, includeing poisson noise (but not CRs)
+            #save simulated signal ramp, including poisson noise (but not CRs)
             #just before rearranging into requested readout pattern
-            if self.params['Output']['save_intermediates']:
+            if ((self.params['Output']['save_intermediates']) & (integ == 0)):
                 h0 = fits.PrimaryHDU()
                 h1 = fits.ImageHDU(mod_ramp)
                 h2 = fits.ImageHDU(zero)
                 hlist = fits.HDUList([h0,h1,h2])
                 hlist.writeto(self.params['Output']['file'][0:-5] + '_simulatedSources_RAPIDramp.fits',overwrite=True)
-                
                 
             #rearrange ramp into the requested readout pattern, to match crs_only_ramp
             if self.params['Readout']['readpatt'].upper() != 'RAPID':
@@ -2138,7 +2344,7 @@ class RampSim():
 
 
                 #if this is the zeroth frame of the integration, save for possible output
-                if ((i == 0) & (j == 0) & (self.dark.meta.exposure.readpatt == 'RAPID')):
+                if ((i == 0) & (j == 0) & (self.dark.header['READPATT'] == 'RAPID')):
                     zeroframe = workimage 
 
             #Now put the signal group into the output cube
@@ -2312,8 +2518,6 @@ class RampSim():
 
 
     def addSyntheticToDark(self,synthetic,dark,syn_zeroframe=None):
-        #ASSUMES INPUT DARK IS A RAMPMODEL INSTANCE
-
         #if zeroframe is provided, the function uses that to create the
         #dark+synthetic zeroframe that is returned. If not provided, the
         #function attempts to use the 0th frame of the input synthetic ramp
@@ -2326,8 +2530,8 @@ class RampSim():
         #But a BRIGHT2 dark can be used to create a BRIGHT2 simulated ramp
 
         #Get the info for the dark integration
-        darkpatt = dark.meta.exposure.readpatt
-        dark_nframe = dark.meta.exposure.nframes
+        darkpatt = dark.header['READPATT']
+        dark_nframe = dark.header['NFRAMES']
         mtch = self.readpatterns['name'].data == darkpatt
         dark_nskip = self.readpatterns['nskip'].data[mtch][0]
 
@@ -2348,7 +2552,6 @@ class RampSim():
         if ((darkpatt == 'RAPID') and (self.params['Readout']['readpatt'] != 'RAPID')): 
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
-            #frames = np.arange(self.params['Readout']['nskip'],deltaframe)
             frames = np.arange(0,self.params['Readout']['nframe'])
             accumimage = np.zeros_like(synthetic[0,:,:],dtype=np.int32)
 
@@ -2363,14 +2566,14 @@ class RampSim():
                     #If averaging needs to be done
                     if self.params['Readout']['nframe'] > 1:
                         accumimage = np.mean(dark.data[0,frames,:,:],axis=0)
-                        errimage = np.mean(dark.err[0,frames,:,:],axis=0)
-                        gdqimage = dark.groupdq[0,frames[-1],:,:]
+                        #errimage = np.mean(dark.err[0,frames,:,:],axis=0)
+                        #gdqimage = dark.groupdq[0,frames[-1],:,:]
                         
                         #If no averaging needs to be done
                     else:
                         accumimage = dark.data[0,frames[0],:,:]
-                        errimage = dark.err[0,frames[0],:,:]
-                        gdqimage = dark.groupdq[0,frames[0],:,:]
+                        #errimage = dark.err[0,frames[0],:,:]
+                        #gdqimage = dark.groupdq[0,frames[0],:,:]
 
                     #now add the averaged dark frame to the synthetic data, which has already been
                     #placed into the correct readout pattern
@@ -2390,31 +2593,47 @@ class RampSim():
 
 
     def reorderDark(self,dark):
-        #ASSUMES INPUT DARK IS A RAMPMODEL INSTANCE
-
         #Reorder the input dark ramp using the requested readout pattern (nframe,nskip).
         #If the initial dark ramp is RAPID, then save and return the 0th frame.
 
+        if self.params['Reffiles']['linearized_darkfile']:
+            datatype = np.float
+        else:
+            datatype = np.int32
+            
         #Get the info for the dark integration
-        darkpatt = dark.meta.exposure.readpatt
-        dark_nframe = dark.meta.exposure.nframes
+        darkpatt = dark.header['READPATT']
+        dark_nframe = dark.header['NFRAMES']
         mtch = self.readpatterns['name'].data == darkpatt
         dark_nskip = self.readpatterns['nskip'].data[mtch][0]
 
         nint,ngroup,yd,xd = dark.data.shape
         outdark = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
-        outerr = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
-        outgdq = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
-  
+
+        if dark.sbAndRefpix is not None:
+            outsb = np.zeros((self.params['Readout']['nint'],self.params['Readout']['ngroup'],yd,xd))
+            
         #We can only keep a zero frame around if the input dark
         #is RAPID. Otherwise that information is lost.
         darkzero = None
-        if (darkpatt == 'RAPID'):
-            darkzero = dark.data[0,0,:,:]
-            print("Saving 0th frame to save in a separate extension")
-        else:
+        sbzero = None
+        if ((darkpatt == 'RAPID') & (dark.zeroframe is None)):
+            dark.zeroframe = dark.data[:,0,:,:]
+            print("Saving 0th frame from data to the zeroframe extension")
+            if dark.sbAndRefpix is not None:
+                sbzero = dark.sbAndRefpix[:,0,:,:]
+        elif ((darkpatt != 'RAPID') & (dark.zeroframe is None)):
             print("Unable to save the zeroth frame because the input dark current ramp is not RAPID.")
-            
+            sbzero = None            
+        elif ((darkpatt == 'RAPID') & (dark.zeroframe is not None)):
+            #in this case we already have the zeroframe
+            if dark.sbAndRefpix is not None:
+                sbzero = dark.sbAndRefpix[:,0,:,:]
+        elif ((darkpatt != 'RAPID') & (dark.zeroframe is not None)):
+            #non RAPID dark, zeroframe is present, but we can't get sbAndRefpix for
+            #the zeroth frame because the pattern is not RAPID.
+            sbzero = None
+                
         #We have already guaranteed that either the readpatterns match
         #or the dark is RAPID, so no need to worry about checking for 
         #other cases here.
@@ -2422,11 +2641,13 @@ class RampSim():
         if ((darkpatt == 'RAPID') and (self.params['Readout']['readpatt'] != 'RAPID')): 
 
             deltaframe = self.params['Readout']['nskip']+self.params['Readout']['nframe']
-            #frames = np.arange(self.params['Readout']['nskip'],deltaframe)
             frames = np.arange(0,self.params['Readout']['nframe'])
-            accumimage = np.zeros_like(outdark[0,0,:,:],dtype=np.int32)
+            accumimage = np.zeros_like(outdark[0,0,:,:],dtype=datatype)
 
-            #Look over integrations
+            if dark.sbAndRefpix is not None:
+                zeroaccumimage = np.zeros_like(outdark[0,0,:,:],dtype=np.float)
+            
+            #Loop over integrations
             for integ in range(self.params['Readout']['nint']):
                 
                 #Loop over groups
@@ -2437,19 +2658,19 @@ class RampSim():
                     #If averaging needs to be done
                     if self.params['Readout']['nframe'] > 1:
                         accumimage = np.mean(dark.data[integ,frames,:,:],axis=0)
-                        errimage = np.mean(dark.err[integ,frames,:,:],axis=0)
-                        gdqimage = dark.groupdq[integ,frames[-1],:,:]
-
+                        if dark.sbAndRefpix is not None:
+                            zeroaccumimage = np.mean(dark.sbAndRefpix[integ,frames,:,:],axis=0)
+                        
                         #If no averaging needs to be done
                     else:
                         accumimage = dark.data[integ,frames[0],:,:]
-                        errimage = dark.err[integ,frames[0],:,:]
-                        gdqimage = dark.groupdq[integ,frames[0],:,:]
-
+                        if dark.sbAndRefpix is not None:
+                            zeroaccumimage = dark.sbAndRefpix[integ,frames[0],:,:]
+                            
                     outdark[integ,i,:,:] += accumimage
-                    outerr[integ,i,:,:] += errimage
-                    outgdq[integ,i,:,:] = gdqimage
-
+                    if dark.sbAndRefpix is not None:
+                        outsb[integ,i,:,:] += zeroaccumimage
+                    
                     #increment the frame indexes
                     frames = frames + deltaframe
 
@@ -2457,29 +2678,25 @@ class RampSim():
             #if the input dark is not RAPID, or if the readout pattern of the input dark and
             #the output ramp match, then no averaging needs to be done 
             outdark = dark.data[:,0:self.params['Readout']['ngroup'],:,:]
-            outerr = dark.err[:,0:self.params['Readout']['ngroup'],:,:]
-            outgdq = dark.groupdq[:,0:self.params['Readout']['ngroup'],:,:]
+            if dark.sbAndRefpix is not None:
+                outsb = dark.sbAndRefpix[:,0:self.params['Readout']['ngroup'],:,:]
         else:
             #This check should already have been done, but just to be sure...
             print("WARNING: dark current readout pattern is {} and requested output is {}.".format(darkpatt,self.params['Readout']['readpatt']))
             print("Cannot convert between the two.")
             sys.exit()
 
-
-        #Now place the reorganized dark into the model instance and update the appropriate metadata
-        #dark.data = np.expand_dims(outdark,axis=0)
+        #Now place the reorganized dark into the data object and update the appropriate metadata
         dark.data = outdark
-        dark.meta.exposure.readpatt = self.params['Readout']['readpatt'] 
-        dark.meta.exposure.nframes = self.params['Readout']['nframe']
-        dark.meta.exposure.nskip = self.params['Readout']['nskip']
-        dark.meta.exposure.ngroups = self.params['Readout']['ngroup']
-        dark.meta.exposure.nint = self.params['Readout']['nint']
-        #dark.err = np.expand_dims(outerr,axis=0)
-        #dark.groupdq = np.expand_dims(outgdq,axis=0)
-        dark.err = outerr
-        dark.groupdq = outgdq
+        if dark.sbAndRefpix is not None:
+            dark.sbAndRefpix = outsb
+        dark.header['READPATT'] = self.params['Readout']['readpatt'] 
+        dark.header['NFRAMES'] = self.params['Readout']['nframe']
+        dark.header['NSKIP'] = self.params['Readout']['nskip']
+        dark.header['NGROUPS'] = self.params['Readout']['ngroup']
+        dark.header['NINTS'] = self.params['Readout']['nint']
 
-        return dark,darkzero
+        return dark,sbzero
 
 
     def doNonLin(self,image,coeffs,sat):
@@ -2490,7 +2707,6 @@ class RampSim():
         if sat.shape != image.shape[-2:]:
             print("WARNING: in doNonLin, input image shape is {}, but input saturation map shape is {}".format(image.shape[-2:],sat.shape))
             sys.exit()
-
 
         #sat is the original saturation map data for non-linear ramps. Translate to saturation maps
         #for the linear ramps here so that we can pay attention only to non-saturated pixels in
@@ -2513,12 +2729,10 @@ class RampSim():
         val = self.nonLinFunc(image,coeffs,sat)
         val[i2]=1.
 
-
         if self.params['nonlin']['robberto']:            
             x = image * val
         else:
             x[i1] = (image[i1]+image[i1]/val[i1]) / 2. #I added the i1 used here...
-
 
             while i < self.params['nonlin']['maxiter']:
                 i=i+1
@@ -2746,48 +2960,190 @@ class RampSim():
     def getBaseDark(self):
         #read in the dark current ramp that will serve as the
         #base for the simulated ramp
-        self.dark = RampModel(self.params['Reffiles']['dark'])
+        self.dark = read_fits.Read_fits()
+        self.dark.file = self.params['Reffiles']['dark']
 
-        #remove non-pipeline related keywords (e.g. CV3 temps/voltages)
-        self.dark.__delattr__('extra_fits')
-        
+        #depending on the method indicated in the input file
+        #read in the dark using astropy or RampModel
+        if self.params['Inst']['use_JWST_pipeline']:
+            self.dark.read_datamodel()
+
+            try:
+                #remove non-pipeline related keywords (e.g. CV3 temps/voltages)
+                self.dark.__delattr__('extra_fits')
+            except:
+                pass
+                
+        else:
+            self.dark.read_astropy()
+
+
+        print("read in in getbasedark:")
+        print(self.dark.data[0,0:3,400,400])
+            
+        try:
+            print('Read base dark, data shape: {}'.format(self.dark.data.shape))
+        except:
+            print('Read base dark, data extension not present!!')
+
+        try:
+            print('Read base dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        except:
+            print('Read base dark, zeroframe extension not present!!')
+
+        try:
+            print('Read base dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        except:
+            print('Read base dark, sbAndRefpix extension not present!!')
+
+
+        try:
+            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
+        except:
+            print('Read linear dark, data extension not present!!')
+
+        try:
+            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        except:
+            print('Read linear dark, zeroframe extension not present!!')
+
+        try:
+            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        except:
+            print('Read linear dark, sbAndRefpix extension not present!!')
+
+            
         #We assume that the input dark current integration is raw, which means
         #the data are in the original ADU measured by the detector. So the
         #data range should be no larger than 65536
-        darkrange = self.dark.data.max() - self.dark.data.min()
+        darkrange = 1.*self.dark.data.max() - 1.*self.dark.data.min()
         if darkrange > 65535.:
             print("WARNING: Range of data values in the input dark is too large.")
             print("We assume the input dark is raw ADU values, with a range no more than 65536.")
             sys.exit()
 
+        print("check for too high getbasedark:")
+        print(self.dark.data[0,0:3,400,400])
+
+            
         #If the inputs are signed integers, change to unsigned.
         if self.dark.data.min() < 0.:
             self.dark.data += 32768
 
+
+        print("check for bzero getbasedark:")
+        print(self.dark.data[0,0:3,400,400])
+            
         #If the input is any readout pattern other than RAPID, then
         #make sure that the output readout patten matches. Only RAPID
         #can be averaged and transformed into another readout pattern
-        if self.dark.meta.exposure.readpatt != 'RAPID':
-            if self.params['Readout']['readpatt'].upper() != self.dark.meta.exposure.readpatt:
-                print("WARNING: cannot transform input {} integration into output {} integration. Only RAPID inputs can be translated to a different readout pattern".format(self.dark.meta.exposure.readpatt,self.params['Readout']['readpatt']))
+        #if self.dark.meta.exposure.readpatt != 'RAPID':
+        if self.dark.header['READPATT'] != 'RAPID':
+            #zframe = None
+            if self.params['Readout']['readpatt'].upper() != self.dark.header['READPATT']:
+                print("WARNING: cannot transform input {} integration into output {} integration. Only RAPID inputs can be translated to a different readout pattern".format(self.dark.header['READPATT'],self.params['Readout']['readpatt']))
                 sys.exit()
+        else:
+            pass
+            #zframe = self.dark.data[0,0,:,:]
 
         #Finally, collect information about the detector, which will be needed for astrometry later
-        self.detector = self.dark.meta.instrument.detector
-        self.instrument = self.dark.meta.instrument.name
+        self.detector = self.dark.header['DETECTOR']
+        self.instrument = self.dark.header['INSTRUME']
+        self.fastaxis = self.dark.header['FASTAXIS']
+        self.slowaxis = self.dark.header['SLOWAXIS']
+        #return zframe
 
+        
+
+    def readLinearDark(self):
+        #Read in the linearized version of the dark current ramp
+        try:
+            print('Reading in linearized dark current ramp from {}'.format(self.params['Reffiles']['linearized_darkfile']))
+            self.linDark = read_fits.Read_fits()
+            self.linDark.file = self.params['Reffiles']['linearized_darkfile']
+            self.linDark.read_astropy()
+            try:
+                print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
+            except:
+                print('Read linear dark, data extension not present!!')
+
+            try:
+                print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+            except:
+                print('Read linear dark, zeroframe extension not present!!')
+
+            try:
+                print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+            except:
+                print('Read linear dark, sbAndRefpix extension not present!!')
+                
+
+        except:
+            print('WARNING: Unable to read in linearized dark ramp.')
+            sys.exit()
+
+        #Finally, collect information about the detector, which will be needed for astrometry later
+        self.detector = self.linDark.header['DETECTOR']
+        self.instrument = self.linDark.header['INSTRUME']
+        self.fastaxis = self.linDark.header['FASTAXIS']
+        self.slowaxis = self.linDark.header['SLOWAXIS']
+        
         
     def cropDark(self,model):
         #cut the dark current array down to the size dictated by the
         #subarray bounds
-        nint,ngrp,yd,xd = model.data.shape
-        if ((self.subarray_bounds[0] != 0) or (self.subarray_bounds[2] != (xd-1)) or (self.subarray_bounds[1] != 0) or (self.subarray_bounds[3] != (yd-1))):
-            print("Information: a full frame dark ramp was provided as input, but a subarray was specified as output. Extracting the appropriate sub-array area.")
+        modshape = model.data.shape
+        yd = modshape[-2]
+        xd = modshape[-1]
+        
+        if ((self.subarray_bounds[0] != 0) or (self.subarray_bounds[2] != (xd-1))
+            or (self.subarray_bounds[1] != 0) or (self.subarray_bounds[3] != (yd-1))):
 
-            model.data = model.data[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-            model.err = model.err[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-            model.pixeldq = model.pixeldq[self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
-            model.groupdq = model.groupdq[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+            if len(modshape) == 4:
+                model.data = model.data[:,:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,
+                                        self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                try:
+                    model.sbAndRefpix = model.sbAndRefpix[:,:,self.subarray_bounds[1]:
+                                                          self.subarray_bounds[3]+1,
+                                                          self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
+                try:
+                    model.zeroframe = model.zeroframe[:,self.subarray_bounds[1]:
+                                                          self.subarray_bounds[3]+1,
+                                                          self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
+            if len(modshape) == 3:
+                model.data = model.data[:,self.subarray_bounds[1]:self.subarray_bounds[3]+1,
+                                        self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                try:
+                    model.sbAndRefpix = model.sbAndRefpix[:,self.subarray_bounds[1]:
+                                                          self.subarray_bounds[3]+1,
+                                                          self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
+                try:
+                    model.zeroframe = model.zeroframe[:,self.subarray_bounds[1]:
+                                                      self.subarray_bounds[3]+1,
+                                                      self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
+            elif len(modshape) == 2:
+                model.data = model.data[self.subarray_bounds[1]:self.subarray_bounds[3]+1,
+                                        self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                try:
+                    model.sbAndRefpix = model.sbAndRefpix[self.subarray_bounds[1]:self.subarray_bounds[3]+1,
+                                                          self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
+                try:
+                    model.zeroframe = model.zeroframe[self.subarray_bounds[1]:
+                                                      self.subarray_bounds[3]+1,
+                                                      self.subarray_bounds[0]:self.subarray_bounds[2]+1]
+                except:
+                    pass
 
         #make sure that if the output is supposedly a 4-amplifier file, that the number of
         #pixels in the x direction is a multiple of 4.
@@ -2808,19 +3164,18 @@ class RampSim():
         return model
 
 
-    def dataVolumeCheck(self):
+    def dataVolumeCheck(self,obj):
         #make sure that the input integration has enough frames/groups to create the requested
         #number of frames/groups of the output
         ngroup = int(self.params['Readout']['ngroup'])
         nframe = int(self.params['Readout']['nframe'])
         nskip = int(self.params['Readout']['nskip'])
 
-        inputframes = self.dark.data.shape[1]
+        inputframes = obj.data.shape[1]
         if ngroup*(nskip+nframe) > inputframes:
             print("WARNING: Not enough frames in the input integration to create the requested number of output groups. Input has {} frames. Requested output is {} groups each created from {} frames plus skipping {} frames between groups.".format(inputframes,ngroup,nframe,nskip))
             print("for a total of {} frames.".format(ngroup*(nframe+nskip)))
             print("Making copies of {} dark current frames and adding them to the end of the dark current integration.".format(ngroup*(nskip+nframe) - inputframes))
-            #sys.exit()
 
             #figure out how many more frames we need, in terms of how many copies of hte original dark
             div = (ngroup*(nskip+nframe)) / inputframes
@@ -2831,30 +3186,27 @@ class RampSim():
             #thing as many times as necessary, adding the signal from the previous
             #final frame to each.
             for ints in xrange(div-1):
-                extra_frames = np.copy(self.dark.data)#[:,:,:,:])
-                extra_err_frames = np.copy(self.dark.err)#[:,:,:,:])
-                extra_dq_frames = np.copy(self.dark.groupdq)#[:,:,:,:])
-                self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[:,-1,:,:]))
-                self.dark.err = np.hstack((self.dark.err,extra_err_frames+self.dark.err[:,-1,:,:]))
-                self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[:,-1,:,:]))
-            
+                extra_frames = np.copy(obj.data)
+                obj.data = np.hstack((obj.data,extra_frames+obj.data[:,-1,:,:]))
+                if obj.sbAndRefpix is not None:
+                    extra_sb = np.copy(obj.sbAndRefpix)
+                    obj.sbAndRefpix = np.hstack((obj.sbAndRefpix,extra_sb+obj.sbAndRefpix[:,-1,:,:]))
+                
             #At this point, if more frames are needed, but fewer than an entire copy of self.dark.data,
             #then add the appropriate number of frames here.
-            extra_frames = np.copy(self.dark.data[:,1:mod+1,:,:]) - self.dark.data[:,0,:,:]
-            extra_err_frames = np.sqrt(np.copy(self.dark.err[:,1:mod+1,:,:])**2 + self.dark.err[:,-1,:,:]**2)
-            extra_dq_frames = np.copy(self.dark.groupdq[:,1:mod+1,:,:])
-            self.dark.data = np.hstack((self.dark.data,extra_frames+self.dark.data[:,-1,:,:]))
-            self.dark.err = np.hstack((self.dark.err,extra_err_frames))
-            self.dark.groupdq = np.hstack((self.dark.groupdq,extra_dq_frames+self.dark.groupdq[:,-1,:,:]))
-
+            extra_frames = np.copy(obj.data[:,1:mod+1,:,:]) - obj.data[:,0,:,:]
+            obj.data = np.hstack((obj.data,extra_frames+obj.data[:,-1,:,:]))
+            if obj.sbAndRefpix is not None:
+                extra_sb = np.copy(obj.sbAndRefpix[:,1:mod+1,:,:]) - obj.sbAndRefpix[:,0,:,:]
+                obj.sbAndRefpix = np.hstack((obj.sbAndRefpix,extra_sb+obj.sbAndRefpix[:,-1,:,:]))
+            
         elif ngroup*(nskip+nframe) < inputframes:
             #if there are more frames in the dark than we'll need, crop the extras
             #in order to reduce memory use
-            self.dark.data = self.dark.data[:,0:ngroup*(nskip+nframe),:,:]
-            self.dark.err = self.dark.err[:,0:ngroup*(nskip+nframe),:,:]
-            self.dark.groupdq = self.dark.groupdq[:,0:ngroup*(nskip+nframe),:,:]
-            
-        self.dark.meta.exposure.ngroups = ngroup*(nskip+nframe)
+            obj.data = obj.data[:,0:ngroup*(nskip+nframe),:,:]
+            if obj.sbAndRefpix is not None:
+                obj.sbAndRefpix = obj.sbAndRefpix[:,0:ngroup*(nskip+nframe),:,:]
+        obj.header['NGROUPS'] = ngroup*(nskip+nframe)
             
             
     def CRfuncs(self,npix):
@@ -4166,7 +4518,6 @@ class RampSim():
                         usefilt = 'pupil'
                     else:
                         usefilt = 'filter'
-                    print("For point sources, using {} to determine countrate.".format(self.params['Readout'][usefilt]))
                     cval = self.countvalues[self.params['Readout'][usefilt]]
 
                     #DEAL WITH THIS LATER, ONCE PYSYNPHOT IS INCLUDED WITH PIPELINE DIST?
@@ -4199,8 +4550,8 @@ class RampSim():
         #If no good point sources were found in the requested array, alert the user
         if len(pointSourceList) < 1:
             print("Warning: no point sources within the requested array.")
-            print("The point source image option is being turned off")
-            self.runStep['pointsource']=False
+            #print("The point source image option is being turned off")
+            #self.runStep['pointsource']=False
             if self.runStep['extendedsource'] == False and self.runStep['cosmicray'] == False:
                 print("Error: no input point sources, extended image, nor cosmic rays specified")
                 print("Exiting...")
@@ -5080,6 +5431,16 @@ class RampSim():
             print("WARNING: unrecognized mode {} for {}. Must be one of: {}".format(self.params['Inst']['mode'],self.params['Inst']['instrument'],possibleModes))
             sys.exit()
 
+        #if user requests not to use the pipeline,
+        #make sure the input is a linearized dark, and not
+        #a raw dark
+        if self.params['Inst']['use_JWST_pipeline'] == False:
+            if self.params['Reffiles']['linearized_darkfile'] is None:
+                print("WARNING: You specified no use of the JWST pipeline, but have")
+                print("not provided a linearized dark file to use. Without the")
+                print("pipeline, a raw dark cannot be used.")
+                sys.exit()
+            
         #make sure nframe,nskip,ngroup are all integers
         try:
             self.params['Readout']['nframe'] = int(self.params['Readout']['nframe'])
@@ -5155,7 +5516,7 @@ class RampSim():
         self.runStep['cosmicray'] = self.checkRunStep(self.params['cosmicRay']['path'])
         self.runStep['saturation_lin_limit'] = self.checkRunStep(self.params['Reffiles']['saturation'])
         self.runStep['fwpw'] = self.checkRunStep(self.params['Reffiles']['filtpupilcombo'])
-        self.runStep['linearized_darkfile'] = self.checkRunStep(self.params['newRamp']['linearized_darkfile'])
+        self.runStep['linearized_darkfile'] = self.checkRunStep(self.params['Reffiles']['linearized_darkfile'])
         self.runStep['hotpixfile'] = self.checkRunStep(self.params['Reffiles']['hotpixmask'])
         self.runStep['pixelAreaMap'] = self.checkRunStep(self.params['Reffiles']['pixelAreaMap'])
 
@@ -5230,30 +5591,10 @@ class RampSim():
         self.params['nonlin']['maxiter'] = self.checkParamVal(self.params['nonlin']['maxiter'],'nonlin max iterations',5,40,10)
         self.params['nonlin']['limit'] = self.checkParamVal(self.params['nonlin']['limit'],'nonlin max value',30000.,1.e6,66000.)
     
-        #Combining the base dark ramp and the simulated signal ramp
-        #comb_types = ['STANDARD','HIGHSIG','PROPER']
-        comb_types = ['PROPER']
-        if self.params['newRamp']['combine_method'].upper() not in comb_types:
-            print("WARNING: unrecognized or unsupported method for combining the dark and simulated signal: {}.".format(self.params['newRamp']['combine_method']))
-            print("Acceptible values are {}".format(comb_types))
-            sys.exit()
-
-        self.runStep['better_combine'] = False
-        if self.params['newRamp']['combine_method'].upper() != 'STANDARD':
-            self.runStep['better_combine'] = True
-
-        #If the use of the better combination method is requested, check what type of pixels it will be used on.
-        better_method = ['HOTPIX','COSMICRAYS','BOTH']
-        self.runStep['better_combine'] = False
-        if self.params['newRamp']['combine_method'].upper() != 'STANDARD' and self.params['newRamp']['proper_combine'].upper() not in better_method:
-            print('WARNING: set of pixels on which to use the proper combination technique is not defined {}.'.format(self.params['newRamp']['proper_combine']))
-            print("Acceptible values are {}".format(better_method))
-            sys.exit()
-
-            
         #If the pipeline is going to be used to create the linearized dark current ramp, make sure the specified 
         #configuration files are present.
-        if self.runStep['better_combine'] and self.runStep['linearized_dark'] == False:
+        #if self.runStep['better_combine'] and self.runStep['linearized_dark'] == False:
+        if self.runStep['linearized_darkfile'] == False:
             dqcheck = self.checkRunStep(self.params['newRamp']['dq_configfile'])
             if dqcheck == False:
                 print("WARNING: DQ pipeline step configuration file not provided. This file is needed to run the pipeline.")
@@ -5270,13 +5611,11 @@ class RampSim():
             if refpixcheck == False:
                 print("WARNING: Refpix pipeline step configuration file not provided. This file is needed to run the pipeline.")
                 sys.exit()
-            lincheck = self.checkRunStep(self.params['newRamp']['lin_configfile'])
+            lincheck = self.checkRunStep(self.params['newRamp']['linear_configfile'])
             if lincheck == False:
                 print("WARNING: Linearity pipeline step configuration file not provided. This file is needed to run the pipeline.")
                 sys.exit()
             
-
-
         #make sure the CR random number seed is an integer
         try:
             self.params['cosmicRay']['seed'] = int(self.params['cosmicRay']['seed'])
@@ -5284,7 +5623,6 @@ class RampSim():
             self.params['cosmicRay']['seed'] = 66231289
             print("ERROR: cosmic ray random number generator seed is bad. Using the default value of {}.".format(self.params['cosmicRay']['seed']))
          
-
         #also make sure the poisson random number seed is an integer
         try:
             self.params['simSignals']['poissonseed'] = int(self.params['simSignals']['poissonseed'])
@@ -5292,7 +5630,6 @@ class RampSim():
             self.params['simSignals']['poissonseed'] = 815813492
             print("ERROR: cosmic ray random number generator seed is bad. Using the default value of {}.".format(self.params['simSignals']['poissonseed']))
          
-
         #ASTROMETRY
         #Read in the distortion coefficients file if present. These will provide a more exact
         #transform from RA,Dec to x,y than the astrometric distortion reference file above.
@@ -5354,7 +5691,7 @@ class RampSim():
 
 
         #check the hot pixel signal limit. Defulat to 5000 if the value in the parameter file is bad.
-        self.params['newRamp']['proper_signal_limit'] = self.checkParamVal(self.params['newRamp']['proper_signal_limit'],'signal limit for proper combine',0.,1.e6,5000.)
+        #self.params['newRamp']['proper_signal_limit'] = self.checkParamVal(self.params['newRamp']['proper_signal_limit'],'signal limit for proper combine',0.,1.e6,5000.)
 
         #make sure the requested output format is an allowed value
         if self.params['Output']['format'] not in allowedOutputFormats:
@@ -5638,6 +5975,7 @@ class RampSim():
             f.write('\n')
             f.write('Reffiles:                                 #Set to None or leave blank if you wish to skip that step\n')
             f.write('  dark: NRCNRCA1-DARK-60091434481_1_481_SE_2016-01-09T15h50m45_uncal.fits               #Dark current integration used as the base\n')
+            f.write('  linearized_darkfile: None\n')
             f.write('  hotpixmask: None                        #Hot pixel mask to go with the dark integration. If none, the script will find hot pixels. Fits file. Ones are hot. Zeros not.\n')
             f.write('  superbias: A1_superbias_from_list_of_biasfiles.list.fits     #Superbias file. Set to None or leave blank if not using\n')
             f.write('  subarray_defs: NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates\n')
@@ -5705,10 +6043,6 @@ class RampSim():
             f.write('  slewAngle: 10.0                            #degrees anti-clockwise from vertical?\n')
             f.write('\n')
             f.write('newRamp:\n')
-            f.write('  combine_method: PROPER\n')
-            f.write('  proper_combine: BOTH\n')
-            f.write('  proper_signal_limit: 5000\n')
-            f.write('  linearized_darkfile: None\n')
             f.write('  dq_configfile: dq_init.cfg\n')
             f.write('  sat_configfile: saturation.cfg\n')
             f.write('  superbias_configfile: superbias.cfg\n')
