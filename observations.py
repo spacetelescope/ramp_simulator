@@ -56,7 +56,7 @@ class observation():
         # wavelength and fnuphot value. Right now we get wavelength from filename and fnuphot is a constant
         self.ys,self.xs = np.nonzero(self.seg)
 
-        print len(self.xs),"pixels to process"
+        print (len(self.xs), "pixels to process")
         self.fs = {}
         for dir_image in self.dir_images:
             try:
@@ -73,7 +73,7 @@ class observation():
                 print("WARNING: unable to find PHOTFLAM keyword in {}".format(dir_image))
                 sys.exit()
                 
-            print "Loaded",dir_image, "wavelength:",l,"A"
+            print ("Loaded",dir_image, "wavelength:",l,"A")
             d = fits.open(dir_image)[1].data
             self.fs[l] = d[self.ys,self.xs] * 1.94e-17 # approx conversion factor from e-/s to erg/s/cm^2/A
 
@@ -131,7 +131,7 @@ class observation():
         #pbar.finish()
         time2 = time.time()
 
-        print time2-time1,"s."
+        print (time2-time1,"s.")
         self.simulated_image = simulated_image
 
     def show(self):
@@ -147,4 +147,3 @@ class observation():
 
         plt.draw()
         raw_input("...")
-
