@@ -181,7 +181,7 @@ class AptInput:
                     try:
                         pdither = imaging_temp.find(nci+'PrimaryDithers').text
                     except:
-                        pdither = '0'
+                        pdither = '1'
                     sdithtype = imaging_temp.find(nci+'SubpixelDitherType').text
                     try:
                         sdither = imaging_temp.find(nci+'SubpixelPositions').text
@@ -190,7 +190,7 @@ class AptInput:
                             stemp = imaging_temp.find(nci+'CoordinatedParallelSubpixelPositions').text
                             sdither = np.int(stemp[0])
                         except:
-                            sdither = '0'
+                            sdither = '1'
                     filtele = imaging_temp.find(nci+'Filters') 
                     filtconfigeles = filtele.findall(nci+'FilterConfig')
                     for fcele in filtconfigeles:
