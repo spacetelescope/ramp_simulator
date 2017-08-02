@@ -133,6 +133,7 @@ class SimInput:
         #find the appropriate reference files. Create lists, and add
         #these lists to the dictionary
         darks = []
+        lindarks = []
         superbias = []
         linearity = []
         saturation = []
@@ -142,6 +143,7 @@ class SimInput:
         pam = []
         for det in self.info['detector']:
             darks.append(self.get_dark(det))
+            lindarks.append(self.get_lindark(det))
             superbias.append(self.get_reffile(self.superbias_list,det))
             linearity.append(self.get_reffile(self.linearity_list,det))
             saturation.append(self.get_reffile(self.saturation_list,det))
@@ -150,6 +152,10 @@ class SimInput:
             ipc.append(self.get_reffile(self.ipc_list,det))
             pam.append(self.get_reffile(self.pam_list,det))
         self.info['dark'] = darks
+        # If linearized darks are to be used, set the darks to None
+        if self.use_linearized_darks:
+            self.info['dark'] = [None] * len(darks)
+        self.info['lindark'] = lindarks
         self.info['superbias'] = superbias
         self.info['linearity'] = linearity
         self.info['saturation'] = saturation
@@ -158,6 +164,9 @@ class SimInput:
         self.info['ipc'] = ipc
         self.info['pixelAreaMap'] = pam
 
+        # Add setting describing whether JWST pipeline will be used
+        self.info['use_JWST_pipeline'] = [self.use_JWST_pipeline] * len(darks)
+        
         #add background rate to the table
         self.info['bkgdrate'] = np.array([self.bkgdrate]*len(self.info['Mode']))
 
@@ -201,11 +210,10 @@ class SimInput:
             tot_dith = np.int(file_dict['dither'])
             primarytot = np.int(file_dict['PrimaryDithers'])
             subpixtot = np.int(file_dict['SubpixelPositions'])
-            primary_dither = np.ceil(tot_dith/primarytot)
-            subpix_dither = tot_dith - primarytot*(primary_dither-1)
+            primary_dither = np.ceil(1.*tot_dith/subpixtot)
+            subpix_dither = tot_dith - (primary_dither * primarytot * subpixtot - subpixtot)
             file_dict['primary_dither_num'] = primary_dither
             file_dict['subpix_dither_num'] = subpix_dither
-            
             self.write_yaml(file_dict)
 
 
@@ -493,6 +501,14 @@ class SimInput:
         return files[rand_index]
 
 
+    def get_lindark(self,detector):
+        #return the name of a linearized dark current file to use as input
+        #based on the detector being used
+        files = self.lindark_list[detector]
+        rand_index = np.random.randint(0,len(files)-1)
+        return files[rand_index]
+
+
     def get_reffile(self,refs,detector):
         #return the appropriate reference file for detector
         #and given reference file dictionary. Assume that
@@ -523,14 +539,15 @@ class SimInput:
             yamlout = input['yamlfile']
         else:
             outtf = True
-            outfile = input['observation_id'] + '_uncal.fits'
-            yamlout = input['observation_id'] + '.yaml'
+            outfile = input['observation_id'] + '_' + input['detector'] + '_uncal.fits'
+            yamlout = input['observation_id'] + '_' + input['detector'] + '.yaml'
             
         with open(yamlout,'w') as f:
             f.write('Inst:\n')
             f.write('  instrument: {}          #Instrument name\n'.format('NIRCam'))
             f.write('  mode: {}                #Observation mode (e.g. imaging, WFSS, moving_target)\n'.format(input['Mode']))
             f.write('  nresetlines: 512                        #eventially use dictionary w/in code to look this up\n')
+            f.write('  use_JWST_pipeline: {}   #Use pipeline in data transformations\n'.format(input['use_JWST_pipeline']))
             f.write('\n')
             f.write('Readout:\n')
             f.write('  readpatt: {}        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized\n'.format(input['ReadoutPattern']))
@@ -548,6 +565,7 @@ class SimInput:
             f.write('\n')
             f.write('Reffiles:                                 #Set to None or leave blank if you wish to skip that step\n')
             f.write('  dark: {}   #Dark current integration used as the base\n'.format(input['dark']))
+            f.write('  linearized_darkfile: {}   # Linearized dark ramp to use as input. Supercedes dark above\n'.format(input['lindark']))
             f.write('  hotpixmask: None                        #Hot pixel mask to go with the dark integration. If none, the script will find hot pixels. Fits file. Ones are hot. Zeros not.\n')
             f.write('  superbias: {}     #Superbias file. Set to None or leave blank if not using\n'.format(input['superbias']))
             f.write('  subarray_defs: NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates\n')
@@ -573,7 +591,6 @@ class SimInput:
             f.write('  accuracy: 0.000001                        #Non-linearity accuracy threshold\n')
             f.write('  maxiter: 10                              #Maximum number of iterations to use when applying non-linearity\n')
             f.write('  robberto:  False                         #Use Massimo Robberto type non-linearity coefficients\n')
-            f.write('\n')
             f.write('\n')
             f.write('cosmicRay:\n')
             f.write('  path: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/cosmic_ray_library/               #Path to CR library\n')
@@ -615,10 +632,6 @@ class SimInput:
             f.write('  rotation: {}                    #y axis rotation (degrees E of N)\n'.format(input['pav3']))
             f.write('\n')
             f.write('newRamp:\n')
-            f.write('  combine_method: PROPER\n')
-            f.write('  proper_combine: BOTH\n')
-            f.write('  proper_signal_limit: 5000\n')
-            f.write('  linearized_darkfile: None\n')
             f.write('  dq_configfile: dq_init.cfg\n')
             f.write('  sat_configfile: saturation.cfg\n')
             f.write('  superbias_configfile: superbias.cfg\n')
@@ -731,7 +744,10 @@ class SimInput:
             self.pam_list[det] = pam_dir+'jwst_nircam_area_0001.fits'
 
         dark_dir = '/ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/darks/'
+        lindark_dir = '/ifs/jwst/wit/nircam/isim_cv3_files_for_calibrations/linearized_darks/'
+
         self.dark_list = {}
+        self.lindark_list = {}
         for det in self.det_list:
             if 'A' in det:
                 mod = 'A'
@@ -744,8 +760,11 @@ class SimInput:
             ddir = dark_dir + mdet + '/'
             dfiles = glob(ddir+'*uncal.fits')
             self.dark_list[det] = dfiles
-            
-                    
+            lddir = lindark_dir + mdet + '/'
+            ldfiles = glob(lddir+'*uncal.fits')
+            self.lindark_list[det] = ldfiles
+
+        
     def add_options(self,parser=None,usage=None):
         if parser is None:
             parser = argparse.ArgumentParser(usage=usage,description='Simulate JWST ramp')
@@ -767,6 +786,8 @@ class SimInput:
         parser.add_argument("--movingTargToTrack",help='Catalog of non-sidereal targets for non-sidereal tracking obs.',nargs='*',default=[None])
         parser.add_argument("--bkgdrate",help='Uniform background rate (e-/s) to add to observation.',default=0.)
         parser.add_argument("--epoch_list",help="Table file containing epoch start times and telescope roll angles",default=None)
+        parser.add_argument("--use_JWST_pipeline",help='True/False',action='store_true')
+        parser.add_argument("--use_linearized_darks",help='True/False',action='store_true')
         return parser
     
 
