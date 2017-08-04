@@ -577,7 +577,7 @@ class SimInput:
             f.write('  pixelflat: None \n')
             f.write('  illumflat: None                               #Illumination flat field file\n')
             f.write('  astrometric: {}  #Astrometric distortion file (asdf)\n'.format(input['astrometric']))
-            f.write('  distortion_coeffs: NIRCam_SIAF_2016-09-29.csv         #CSV file containing distortion coefficients\n')
+            f.write('  distortion_coeffs: {}        #CSV file containing distortion coefficients\n'.format(input['siaf']))
             f.write('  ipc: {} #File containing IPC kernel to apply\n'.format(input['ipc']))
             f.write('  invertIPC: True       #Invert the IPC kernel before the convolution. True or False. Use True if the kernel is designed for the removal of IPC effects, like the JWST reference files are.\n')
             f.write('  crosstalk: xtalk20150303g0.errorcut.txt              #File containing crosstalk coefficients\n')
