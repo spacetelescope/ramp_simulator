@@ -214,6 +214,7 @@ class SimInput:
             subpix_dither = tot_dith - (primary_dither * primarytot * subpixtot - subpixtot)
             file_dict['primary_dither_num'] = primary_dither
             file_dict['subpix_dither_num'] = subpix_dither
+            file_dict['siaf'] = self.siaf
             self.write_yaml(file_dict)
 
 
