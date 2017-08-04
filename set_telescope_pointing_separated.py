@@ -123,12 +123,12 @@ def add_wcs(filename,roll=0.):
     dec = pheader['TARG_DEC']
     #roll = 0
 
-    logger.warning(
-        'Cannot retrieve telescope pointing.'
-        '\n{}'
-        '\nUsing TARG_RA={}, TARG_DEC={} and PA_V3={} '
-        'to set pointing.'.format(exception, ra, dec, roll)
-    )
+    #logger.warning(
+    #    'Cannot retrieve telescope pointing.'
+    #    '\n{}'
+    #    '\nUsing TARG_RA={}, TARG_DEC={} and PA_V3={} '
+    #    'to set pointing.'.format(exception, ra, dec, roll)
+    #)
 
     local_roll = compute_local_roll(roll, ra, dec, v2ref, v3ref)
     wcsinfo = (ra, dec, local_roll)
