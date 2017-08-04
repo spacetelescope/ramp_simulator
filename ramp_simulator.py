@@ -184,6 +184,8 @@ class RampSim():
             print('Read linear dark, sbAndRefpix extension not present!!')
         
 
+        print("input dark readpattern check: {}".format(self.dark.header['READPATT']))
+
         # Put the input dark (or linearized dark) into the requested
         # readout pattern
         #self.dark,darkzeroframe,sbzeroframe = self.reorderDark(self.dark)
@@ -1662,8 +1664,8 @@ class RampSim():
         #scripts and more importantly, databses, is necessary. But they should be
         #close.
 
-        print("Going in to populate_group_table:")
-        print(starttime,grouptime,ramptime,numint,numgroup,ny,nx)
+        #print("Going in to populate_group_table:")
+        #print(starttime,grouptime,ramptime,numint,numgroup,ny,nx)
         
         #Create the table with a first row populated by garbage
         grouptable = self.create_group_entry(999,999,0,0,0,'void',0,0,0,0,'void',1.,1.)
@@ -1983,7 +1985,7 @@ class RampSim():
         channel = 'SHORT'
         if 'LONG' in self.detector:
             channel = 'LONG'
-        outModel[0].header['CHANNEL'] - channel
+        outModel[0].header['CHANNEL'] = channel
         outModel[0].header['FASTAXIS'] = self.fastaxis
         outModel[0].header['SLOWAXIS'] = self.slowaxis
 
@@ -2179,7 +2181,7 @@ class RampSim():
             #to put into ADU, and rearrange into the requested output read
             #pattern
             crs_only_ramp,crs_only_zero = self.frameToRamp(np.zeros_like(ramp[0,:,:]))
-        
+
             #Now deal with the ramp containing the simulated signals. We need to add
             #poisson noise to each frame, and divide by the gain
             #frames,yd,xd = ramp.shape
@@ -2248,6 +2250,8 @@ class RampSim():
         #noise, gain, and we need to add cosmic rays if requested. 
         #Using the base image, multiply by exposure time and generate the collection
         #of frames/groups that will form the final integration
+
+        print("in frametoRamp: {}".format(self.dark.header['READPATT']))
 
         yd,xd = sigimage.shape
         
@@ -2344,7 +2348,8 @@ class RampSim():
 
 
                 #if this is the zeroth frame of the integration, save for possible output
-                if ((i == 0) & (j == 0) & (self.dark.header['READPATT'] == 'RAPID')):
+                if ((i == 0) & (j == 0)): # & (self.dark.header['READPATT'] == 'RAPID')):
+                    print("in frametoramp: setting zeroframe as workimage")
                     zeroframe = workimage 
 
             #Now put the signal group into the output cube
