@@ -72,10 +72,10 @@ import sys
 import astropy.io.fits as fits
 import numpy as np
 from numpy import cos, sin
-from jwst.lib.engdb_tools import (
-    ENGDB_BASE_URL,
-    ENGDB_Service,
-)
+#from jwst.lib.engdb_tools import (
+#    ENGDB_BASE_URL,
+#    ENGDB_Service,
+#)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -116,42 +116,42 @@ def add_wcs(filename,roll=0.):
     # In normal operations, if the paramters cannot be found
     # this should fail.
     # However, for prelaunch, we'll dummy out.
-    try:
-        q, j2fgs_matrix, fsmcorr, obstime = get_pointing(obsstart, obsend)
-    except ValueError as exception:
-        ra = pheader['TARG_RA']
-        dec = pheader['TARG_DEC']
-        #roll = 0
+    #try:
+    #    q, j2fgs_matrix, fsmcorr, obstime = get_pointing(obsstart, obsend)
+    #except ValueError as exception:
+    ra = pheader['TARG_RA']
+    dec = pheader['TARG_DEC']
+    #roll = 0
 
-        logger.warning(
-            'Cannot retrieve telescope pointing.'
-            '\n{}'
-            '\nUsing TARG_RA={}, TARG_DEC={} and PA_V3={} '
-            'to set pointing.'.format(exception, ra, dec, roll)
-        )
+    logger.warning(
+        'Cannot retrieve telescope pointing.'
+        '\n{}'
+        '\nUsing TARG_RA={}, TARG_DEC={} and PA_V3={} '
+        'to set pointing.'.format(exception, ra, dec, roll)
+    )
 
-        local_roll = compute_local_roll(roll, ra, dec, v2ref, v3ref)
-        wcsinfo = (ra, dec, local_roll)
-        vinfo = (ra, dec, roll)
-        crval1, crval2, pa_aper_deg = wcsinfo
-        v1_ra_deg, v1_dec_deg, v3_pa_deg = vinfo
-        pa_aper_deg = local_roll - vparity * v3idlyang
-    else:
-        # compute relevant WCS information
-        logger.info('Successful read of engineering quaternions.')
-        logger.debug('q={}'.format(q))
-        logger.debug('j2fgs_matrix={}'.format(j2fgs_matrix))
-        logger.debug('fsmcorr={}'.format(fsmcorr))
-        wcsinfo, vinfo = calc_wcs(v2ref, v3ref, v3idlyang, vparity,
-                                  q, j2fgs_matrix, fsmcorr)
-        crval1, crval2, pa_aper_deg = wcsinfo
-        v1_ra_deg, v1_dec_deg, v3_pa_deg = vinfo
-        local_roll = compute_local_roll(v3_pa_deg, crval1, crval2, v2ref, v3ref)
-
-        logger.info(
-            'Computed coordinates from quaternions:'
-            '\n\tRA = {} DEC={} PA_V3={}'.format(crval1, crval2, v3_pa_deg)
-        )
+    local_roll = compute_local_roll(roll, ra, dec, v2ref, v3ref)
+    wcsinfo = (ra, dec, local_roll)
+    vinfo = (ra, dec, roll)
+    crval1, crval2, pa_aper_deg = wcsinfo
+    v1_ra_deg, v1_dec_deg, v3_pa_deg = vinfo
+    pa_aper_deg = local_roll - vparity * v3idlyang
+    #else:
+    #    # compute relevant WCS information
+    #    logger.info('Successful read of engineering quaternions.')
+    #    logger.debug('q={}'.format(q))
+    #    logger.debug('j2fgs_matrix={}'.format(j2fgs_matrix))
+    #    logger.debug('fsmcorr={}'.format(fsmcorr))
+    #    wcsinfo, vinfo = calc_wcs(v2ref, v3ref, v3idlyang, vparity,
+    #                              q, j2fgs_matrix, fsmcorr)
+    #    crval1, crval2, pa_aper_deg = wcsinfo
+    #    v1_ra_deg, v1_dec_deg, v3_pa_deg = vinfo
+    #    local_roll = compute_local_roll(v3_pa_deg, crval1, crval2, v2ref, v3ref)
+    #
+    #    logger.info(
+    #        'Computed coordinates from quaternions:'
+    #        '\n\tRA = {} DEC={} PA_V3={}'.format(crval1, crval2, v3_pa_deg)
+    #    )
 
     pheader['RA_V1'] = v1_ra_deg
     pheader['DEC_V1'] = v1_dec_deg
