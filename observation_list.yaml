@@ -1,0 +1,136 @@
+#example observation list for the APT -> simulator code.
+#
+#Observation names must match up with those in the xml
+#file from APT.
+#Observation dates should be in the format: YYYY-MM-DD
+#Roll angle is PAV3, which is available from the
+#JWST General Target Visibility Tool (GTVT)
+#Roll angles and dates are not checked against the 
+#GTVT and do not need to agree with the tool's outputs
+#
+#For multiple observations that you want taken back-to-back,
+#use the same date for all
+
+Observation1:
+  Name: 'observation #1'
+  Date: 2019-10-14
+  PAV3: 0.
+  SWFilter:
+    Name: F200W
+    PointSourceCatalog: F200W_stars.cat
+    GalaxyCatalog: F200W_galaxies.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+  LWFilter:
+    Name: F444W
+    PointSourceCatalog: F444W_stars.cat
+    GalaxyCatalog: F444W_galaxies.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+    
+Observation2:
+  Name: 'observation #2'
+  Date: 2020-01-14
+  PAV3: 88.
+  SWFilter:
+    Name: F200W
+    PointSourceCatalog: F200W_stars.cat
+    GalaxyCatalog: F200W_galaxies.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+  LWFilter:
+    Name: F444W
+    PointSourceCatalog: F444W_stars.cat
+    GalaxyCatalog: F444W_galaxies.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+
+Observation3:
+  Name: 'pointing 3'
+  Date: 2020-01-17
+  PAV3: 0.
+  SWFilter:
+    Name: F200W
+    PointSourceCatalog: F200W_stars_pointing3.cat
+    GalaxyCatalog: F200W_galaxies_pointing3.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+  LWFilter:
+    Name: F444W
+    PointSourceCatalog: F444W_stars_pointing3.cat
+    GalaxyCatalog: F444W_galaxies_pointing3.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+
+Observation4:
+  Name: 'pointing 4'
+  Date: 2020-04-17
+  PAV3: 88.
+  SWFilter:
+    Name: F200W
+    PointSourceCatalog: F200W_stars_pointing4.cat
+    GalaxyCatalog: F200W_galaxies_pointing4.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0
+  LWFilter:
+    Name: F444W
+    PointSourceCatalog: F444W_stars_pointing4.cat
+    GalaxyCatalog: F444W_galaxies_pointing4.cat
+    ExtendedCatalog: None
+    ExtendedScale: 1.0
+    ExtendedCenter: 1024,1024
+    MovingTargetList: None
+    MovingTargetSersic: None
+    MovingTargetExtended: None
+    MovingTargetConvolveExtended: True
+    MovingTargetToTrack: None
+    BackgroundRate: 0.0

@@ -46,6 +46,7 @@ from astropy.io import ascii
 import numpy as np
 import sys,os
 import collections
+import yaml
 import rotations
 import set_telescope_pointing_separated as set_telescope_pointing
 
@@ -66,6 +67,8 @@ class AptInput:
         self.output_csv = None #e.g. 'GOODSS_ditheredDatasetTest.csv'
         self.pointing_file = '' #e.g. 'GOODSS_ditheredDatasetTest.pointing'
         self.siaf = ''
+        self.observation_table = ''
+        self.output_csv = None
         
 
     def read_xml(self,infile):
@@ -904,9 +907,6 @@ class AptInput:
 
     def ra_dec_update(self):
         #given the v2,v3 values in each entry, calculate RA,Dec
-        #For now, assume a roll angle of zero. We would only
-        #know roll angle once the program is scheduled
-        #print('Performing RA,Dec updates, assuming a roll angle of zero!!!')
 
         #read in siaf
         distortionTable = ascii.read(self.siaf,header_start=1)
@@ -927,7 +927,7 @@ class AptInput:
             pointing_v3 = np.float(self.exposure_tab['v3'][i])
             pav3 = np.float(self.exposure_tab['pav3'][i])
 
-            #assume for now a telescope roll angle of 0.
+            #calculate local roll angle
             local_roll = set_telescope_pointing.compute_local_roll(pav3,pointing_ra,
                                                                    pointing_dec,
                                                                    pointing_v2,
@@ -941,6 +941,13 @@ class AptInput:
             
             #calculate RA, Dec of reference location for the detector
             ra,dec = rotations.pointing(attitude_matrix,aperture_v2,aperture_v3)
+            #if dec < 0:
+            #    print("ra, dec: {}, {}".format(ra,dec))
+            #    print('attitude matrix {}'.format(attitude_matrix))
+            #    print('aperture v2,v3: {}, {}'.format(aperture_v2.data,aperture_v3.data))
+            #    print(pointing_v2,pointing_v3,pointing_ra,pointing_dec,local_roll,pav3)
+            #    stop
+
             aperture_ra.append(ra)
             aperture_dec.append(dec)
         self.exposure_tab['ra_ref'] = aperture_ra
@@ -970,13 +977,16 @@ class AptInput:
 
         #read in the pointing file and produce dictionary
         pointing_tab = self.get_pointing_info(self.pointing_file,xmltab['ProposalID'][0])
-        
+
         #combine the dictionaries
         obstab = self.combine_dicts(xmltab,pointing_tab)
 
         #add epoch information
-        obstab = self.add_epochs(obstab)
+        #obstab = self.add_epochs(obstab)
 
+        # add epoch and catalog information
+        obstab = self.add_observation_info(obstab)
+        
         #test - look at epoch output
         #ascii.write(Table(obstab), 'test_epoch_output.csv', format='csv', overwrite=True)
         
@@ -994,7 +1004,111 @@ class AptInput:
         ascii.write(Table(self.exposure_tab), self.output_csv, format='csv', overwrite=True)
         print('Final csv exposure list written to {}'.format(self.output_csv))
 
+        
+    def read_observation_table(self,file):
+        with open(file,'r') as infile:
+            self.obstab = yaml.load(infile)
+        
 
+    def add_observation_info(self,intab):
+        # Add information about each observation. Catalog names,
+        # dates, PAV3 values, etc.
+        self.read_observation_table(self.observation_table)
+
+        onames = []
+        for key1 in self.obstab:
+            onames.append(self.obstab[key1]['Name'])
+        onames = np.array(onames)
+            
+        obs_start = []
+        obs_pav3 = []
+        obs_sw_ptsrc = []
+        obs_sw_galcat = []
+        obs_sw_ext = []
+        obs_sw_extscl = []
+        obs_sw_extcent = []
+        obs_sw_movptsrc = []
+        obs_sw_movgal = []
+        obs_sw_movext = []
+        obs_sw_movconv = []
+        obs_sw_solarsys = []
+        obs_sw_bkgd = []
+        obs_lw_ptsrc = []
+        obs_lw_galcat = []
+        obs_lw_ext = []
+        obs_lw_extscl = []
+        obs_lw_extcent = []
+        obs_lw_movptsrc = []
+        obs_lw_movgal = []
+        obs_lw_movext = []
+        obs_lw_movconv = []
+        obs_lw_solarsys = []
+        obs_lw_bkgd = []
+        
+        for obs in intab['obs_label']:
+            match = np.where(obs == onames)[0]
+            if len(match) == 0:
+                print("No valid epoch line found for observation {}".format(obs))
+                print(type(obs))
+                print(onames)
+                sys.exit()
+            else:
+                #print('Matching {} from xml with {} from observation listfile'.format(obs,onames[match[0]]))
+                obslist = self.obstab['Observation{}'.format(match[0]+1)]
+                #print(type(obslist['Date']))
+                #stop
+                #obs_start.append(obslist['Date'])
+                obs_start.append(obslist['Date'].strftime('%Y-%m-%d'))
+                obs_pav3.append(obslist['PAV3'])
+                obs_sw_ptsrc.append(obslist['SWFilter']['PointSourceCatalog'])
+                obs_sw_galcat.append(obslist['SWFilter']['GalaxyCatalog'])
+                obs_sw_ext.append(obslist['SWFilter']['ExtendedCatalog'])
+                obs_sw_extscl.append(obslist['SWFilter']['ExtendedScale'])
+                obs_sw_extcent.append(obslist['SWFilter']['ExtendedCenter'])
+                obs_sw_movptsrc.append(obslist['SWFilter']['MovingTargetList'])
+                obs_sw_movgal.append(obslist['SWFilter']['MovingTargetSersic'])
+                obs_sw_movext.append(obslist['SWFilter']['MovingTargetExtended'])
+                obs_sw_movconv.append(obslist['SWFilter']['MovingTargetConvolveExtended'])
+                obs_sw_solarsys.append(obslist['SWFilter']['MovingTargetToTrack'])
+                obs_sw_bkgd.append(obslist['SWFilter']['BackgroundRate'])
+                obs_lw_ptsrc.append(obslist['LWFilter']['PointSourceCatalog'])
+                obs_lw_galcat.append(obslist['LWFilter']['GalaxyCatalog'])
+                obs_lw_ext.append(obslist['LWFilter']['ExtendedCatalog'])
+                obs_lw_extscl.append(obslist['LWFilter']['ExtendedScale'])
+                obs_lw_extcent.append(obslist['LWFilter']['ExtendedCenter'])
+                obs_lw_movptsrc.append(obslist['LWFilter']['MovingTargetList'])
+                obs_lw_movgal.append(obslist['LWFilter']['MovingTargetSersic'])
+                obs_lw_movext.append(obslist['LWFilter']['MovingTargetExtended'])
+                obs_lw_movconv.append(obslist['LWFilter']['MovingTargetConvolveExtended'])
+                obs_lw_solarsys.append(obslist['LWFilter']['MovingTargetToTrack'])
+                obs_lw_bkgd.append(obslist['LWFilter']['BackgroundRate'])
+        intab['epoch_start_date'] = obs_start
+        intab['pav3'] = obs_pav3
+        intab['sw_ptsrc'] = obs_sw_ptsrc
+        intab['sw_galcat'] = obs_sw_galcat
+        intab['sw_ext'] = obs_sw_ext
+        intab['sw_extscl'] = obs_sw_extscl
+        intab['sw_extcent'] = obs_sw_extcent
+        intab['sw_movptsrc'] = obs_sw_movptsrc
+        intab['sw_movgal'] = obs_sw_movgal
+        intab['sw_movext'] = obs_sw_movext
+        intab['sw_movconv'] = obs_sw_movconv
+        intab['sw_solarsys'] = obs_sw_solarsys
+        intab['sw_bkgd'] = obs_sw_bkgd
+        intab['lw_ptsrc'] = obs_lw_ptsrc
+        intab['lw_galcat'] = obs_lw_galcat
+        intab['lw_ext'] = obs_lw_ext
+        intab['lw_extscl'] = obs_lw_extscl
+        intab['lw_extcent'] = obs_lw_extcent
+        intab['lw_movptsrc'] = obs_lw_movptsrc
+        intab['lw_movgal'] = obs_lw_movgal
+        intab['lw_movext'] = obs_lw_movext
+        intab['lw_movconv'] = obs_lw_movconv
+        intab['lw_solarsys'] = obs_lw_solarsys
+        intab['lw_bkgd'] = obs_lw_bkgd
+        return intab
+    
+        
     def add_epochs(self,intab):
         #add information on the epoch of each observation
         #if the user entered a list of epochs, read that in
@@ -1045,7 +1159,8 @@ class AptInput:
         parser.add_argument("pointing_file",help='Pointing file from APT describing observations.')
         parser.add_argument("siaf",help='Name of CSV version of SIAF')
         parser.add_argument("--output_csv",help="Name of output CSV file containing list of observations.",default=None)
-        parser.add_argument("--epoch_list",help='Ascii file containing a list of observations, times, and roll angles',default=None)
+        #parser.add_argument("--epoch_list",help='Ascii file containing a list of observations, times, and roll angles',default=None)
+        parser.add_argument("--observation_table",help='Ascii file containing a list of observations, times, and roll angles, catalogs',default=None)
         return parser
     
 

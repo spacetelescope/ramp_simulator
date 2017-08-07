@@ -105,10 +105,11 @@ class SimInput:
             apt.input_xml = self.input_xml
             apt.pointing_file = self.pointing_file
             apt.siaf = self.siaf
-            apt.epoch_list = self.epoch_list
+            #apt.epoch_list = self.epoch_list
+            apt.observation_table = self.observation_table
             apt.create_input_table()
             self.info = apt.exposure_tab
-
+            
             #Add start time info to each element
             self.make_start_times()
 
@@ -116,7 +117,7 @@ class SimInput:
             self.make_output_names()
 
             #Add source catalogs
-            self.add_catalogs()
+            #self.add_catalogs()
             
         elif self.table_file is not None:
             print('Reading table file: {}'.format(self.table_file))
@@ -168,7 +169,7 @@ class SimInput:
         self.info['use_JWST_pipeline'] = [self.use_JWST_pipeline] * len(darks)
         
         #add background rate to the table
-        self.info['bkgdrate'] = np.array([self.bkgdrate]*len(self.info['Mode']))
+        #self.info['bkgdrate'] = np.array([self.bkgdrate]*len(self.info['Mode']))
 
         #grism entries
         grism_source_image = ['False'] * len(self.info['Mode'])
@@ -321,7 +322,8 @@ class SimInput:
 
         #b = self.obsdate+'T'+self.obstime
         #base = Time(b)
-        epoch_base_date = self.info['epoch_start_date'][0] 
+        epoch_base_date = self.info['epoch_start_date'][0]
+
         #epoch_start = deepcopy(epoch_base)
         base = Time(epoch_base_date +'T'+ epoch_base_time)
         base_date,base_time = base.iso.split()
@@ -530,10 +532,12 @@ class SimInput:
         if np.int(input['detector'][-1]) < 5:
             filtkey = 'ShortFilter'
             pupilkey = 'ShortPupil'
+            catkey = 'sw'
         else:
             filtkey = 'LongFilter'
             pupilkey = 'LongPupil'
-
+            catkey = 'lw'
+            
         if self.use_nonstsci_names:
             outtf = False
             outfile = input['outputfits']
@@ -553,7 +557,7 @@ class SimInput:
             f.write('Readout:\n')
             f.write('  readpatt: {}        #Readout pattern (RAPID, BRIGHT2, etc) overrides nframe,nskip unless it is not recognized\n'.format(input['ReadoutPattern']))
             f.write('  nframe: {}        #Number of frames per group\n'.format(input['nframe']))
-            f.write('  nskip: 0         #Number of skipped frames between groups\n'.format(input['nskip']))
+            f.write('  nskip: {}         #Number of skipped frames between groups\n'.format(input['nskip']))
             f.write('  ngroup: {}              #Number of groups in integration\n'.format(input['Groups']))
             f.write('  nint: {}          #Number of integrations per exposure\n'.format(input['Integrations']))
             f.write('  namp: {}         #Number of amplifiers used in readout (4 for full frame, 1 for subarray)\n'.format(input['namp']))
@@ -601,28 +605,28 @@ class SimInput:
             f.write('  seed: {}                           #Seed for random number generator\n'.format(np.random.randint(1,2**32-2)))
             f.write('\n')
             f.write('simSignals:\n')
-            f.write('  pointsource: {}   #File containing a list of point sources to add (x,y locations and magnitudes)\n'.format(input['point_source']))
+            f.write('  pointsource: {}   #File containing a list of point sources to add (x,y locations and magnitudes)\n'.format(input['{}_ptsrc'.format(catkey)]))   #'point_source']))
             f.write('  psfpath: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/psf_files/        #Path to PSF library\n')
             f.write('  psfbasename: nircam                        #Basename of the files in the psf library\n')
             f.write('  psfpixfrac: 0.1                           #Fraction of a pixel between entries in PSF library (e.g. 0.1 = files for PSF centered at 0.1 pixel intervals within pixel)\n')
             f.write('  psfwfe: 123                               #PSF WFE value (0,115,123,132,136,150,155)\n')
             f.write('  psfwfegroup: 0                             #WFE realization group (0 to 9)\n')
-            f.write('  galaxyListFile: {}    #File containing a list of positions/ellipticities/magnitudes of galaxies to simulate\n'.format(input['galaxyListFile']))
-            f.write('  extended: {}          #Extended emission count rate image file name\n'.format(input['extended']))
-            f.write('  extendedscale: 1.0                          #Scaling factor for extended emission image\n')
-            f.write('  extendedCenter: 1024,1024                   #x,y pixel location at which to place the extended image if it is smaller than the output array size\n')
+            f.write('  galaxyListFile: {}    #File containing a list of positions/ellipticities/magnitudes of galaxies to simulate\n'.format(input['{}_galcat'.format(catkey)]))   #'galaxyListFile']))
+            f.write('  extended: {}          #Extended emission count rate image file name\n'.format(input['{}_ext'.format(catkey)]))     #'extended']))
+            f.write('  extendedscale: {}                          #Scaling factor for extended emission image\n'.format(input['{}_extscl'.format(catkey)]))
+            f.write('  extendedCenter: {}                   #x,y pixel location at which to place the extended image if it is smaller than the output array size\n'.format(input['{}_extcent'.format(catkey)]))
             f.write('  PSFConvolveExtended: True #Convolve the extended image with the PSF before adding to the output image (True or False)\n')
-            f.write('  movingTargetList: {}          #Name of file containing a list of point source moving targets (e.g. KBOs, asteroids) to add.\n'.format(input['movingTarg']))
-            f.write('  movingTargetSersic: {}  #ascii file containing a list of 2D sersic profiles to have moving through the field\n'.format(input['movingTargSersic']))
-            f.write('  movingTargetExtended: {}      #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)\n'.format(input['movingTargExtended']))
-            f.write('  movingTargetConvolveExtended: True       #convolve the extended moving targets with PSF before adding.\n')
-            f.write('  movingTargetToTrack: {} #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to "moving_target" \n'.format(input['movingTargToTrack']))
+            f.write('  movingTargetList: {}          #Name of file containing a list of point source moving targets (e.g. KBOs, asteroids) to add.\n'.format(input['{}_movptsrc'.format(catkey)]))   #'movingTarg']))
+            f.write('  movingTargetSersic: {}  #ascii file containing a list of 2D sersic profiles to have moving through the field\n'.format(input['{}_movgal'.format(catkey)]))  #'movingTargSersic']))
+            f.write('  movingTargetExtended: {}      #ascii file containing a list of stamp images to add as moving targets (planets, moons, etc)\n'.format(input['{}_movext'.format(catkey)]))  #'movingTargExtended']))
+            f.write('  movingTargetConvolveExtended: {}       #convolve the extended moving targets with PSF before adding.\n'.format(input['{}_movconv'.format(catkey)]))
+            f.write('  movingTargetToTrack: {} #File containing a single moving target which JWST will track during observation (e.g. a planet, moon, KBO, asteroid)	This file will only be used if mode is set to "moving_target" \n'.format(input['{}_solarsys'.format(catkey)]))  #'movingTargToTrack']))
             
             f.write('  zodiacal:  None                          #Zodiacal light count rate image file \n')
             f.write('  zodiscale:  1.0                            #Zodi scaling factor\n')
             f.write('  scattered:  None                          #Scattered light count rate image file\n')
             f.write('  scatteredscale: 1.0                        #Scattered light scaling factor\n')
-            f.write('  bkgdrate: {}                         #Constant background count rate (electrons/sec/pixel)\n'.format(input['bkgdrate']))
+            f.write('  bkgdrate: {}                         #Constant background count rate (electrons/sec/pixel)\n'.format(input['{}_bkgd'.format(catkey)]))  #'bkgdrate']))
             f.write('  poissonseed: {}                  #Random number generator seed for Poisson simulation)\n'.format(np.random.randint(1,2**32-2)))
             f.write('  photonyield: True                         #Apply photon yield in simulation\n')
             f.write('  pymethod: True                            #Use double Poisson simulation for photon yield\n')
@@ -777,16 +781,17 @@ class SimInput:
         parser.add_argument("--use_nonstsci_names",help="Use STScI naming convention for output files",action='store_true')
         parser.add_argument("--subarray_def_file",help="Ascii file containing subarray definitions",default=None)
         parser.add_argument("--readpatt_def_file",help='Ascii file containing readout pattern definitions',default=None)
-        parser.add_argument("--point_source",help='point source catalog file',nargs='*',default=[None])
-        parser.add_argument("--galaxyListFile",help='galaxy (sersic) source catalog file',nargs='*',default=[None])
-        parser.add_argument("--extended",help='extended source catalog file',nargs='*',default=[None])
-        parser.add_argument("--convolveExtended",help='Convolve extended sources with NIRCam PSF?',action='store_true')
-        parser.add_argument("--movingTarg",help='Moving (point source) target catalog (sources moving through fov)',nargs='*',default=[None])
-        parser.add_argument("--movingTargSersic",help='Moving galaxy (sersic) target catalog (sources moving through fov)',nargs='*',default=[None])
-        parser.add_argument("--movingTargExtended",help='Moving extended source target catalog (sources moving through fov)',nargs='*',default=[None])
-        parser.add_argument("--movingTargToTrack",help='Catalog of non-sidereal targets for non-sidereal tracking obs.',nargs='*',default=[None])
-        parser.add_argument("--bkgdrate",help='Uniform background rate (e-/s) to add to observation.',default=0.)
-        parser.add_argument("--epoch_list",help="Table file containing epoch start times and telescope roll angles",default=None)
+        #parser.add_argument("--point_source",help='point source catalog file',nargs='*',default=[None])
+        #parser.add_argument("--galaxyListFile",help='galaxy (sersic) source catalog file',nargs='*',default=[None])
+        #parser.add_argument("--extended",help='extended source catalog file',nargs='*',default=[None])
+        #parser.add_argument("--convolveExtended",help='Convolve extended sources with NIRCam PSF?',action='store_true')
+        #parser.add_argument("--movingTarg",help='Moving (point source) target catalog (sources moving through fov)',nargs='*',default=[None])
+        #parser.add_argument("--movingTargSersic",help='Moving galaxy (sersic) target catalog (sources moving through fov)',nargs='*',default=[None])
+        #parser.add_argument("--movingTargExtended",help='Moving extended source target catalog (sources moving through fov)',nargs='*',default=[None])
+        #parser.add_argument("--movingTargToTrack",help='Catalog of non-sidereal targets for non-sidereal tracking obs.',nargs='*',default=[None])
+        #parser.add_argument("--bkgdrate",help='Uniform background rate (e-/s) to add to observation.',default=0.)
+        #parser.add_argument("--epoch_list",help="Table file containing epoch start times and telescope roll angles",default=None)
+        parser.add_argument("--observation_table",help="Table file containing epoch start times, telescope roll angles, catalogs for each observation",default=None)
         parser.add_argument("--use_JWST_pipeline",help='True/False',action='store_true')
         parser.add_argument("--use_linearized_darks",help='True/False',action='store_true')
         return parser
