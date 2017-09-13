@@ -70,7 +70,7 @@ July 2017 - V0: Initial version. Bryan Hilbert
 
 
 
-import sys,os
+import sys, os
 import argparse
 import numpy as np
 from glob import glob
@@ -94,18 +94,31 @@ class SimInput:
         
         
     def create_inputs(self):
-        #main function
+        # Main function
 
+        # Use full paths for inputs
+        self.input_xml = os.path.abspath(self.input_xml)
+        self.pointing_file = os.path.abspath(self.pointing_file)
+        self.siaf = os.path.abspath(self.siaf)
+        self.output_dir = os.path.abspath(self.output_dir)
+        if self.table_file is not None:
+            self.table_file = os.path.abspath(self.table_file)
+        if self.subarray_def_file is not None:
+            self.subarray_def_file = os.path.abspath(self.subarray_def_file)
+        if self.readpatt_def_file is not None:
+            self.readpatt_def_file = os.path.abspath(self.readpatt_def_file)
+        if self.observation_table is not None:
+            self.observation_table = os.path.abspath(self.observation_table)
+        
         if ((self.input_xml is not None) & (self.pointing_file is not None) & (self.siaf is not None)):
             print('Using {}, {}, and {} to generate observation table.'.
                   format(self.input_xml,self.pointing_file,self.siaf))
             indir,infile = os.path.split(self.input_xml)
-            final_file = 'Observation_table_for_'+infile+'_with_yaml_parameters.csv'
+            final_file = os.path.join(self.output_dir,'Observation_table_for_'+infile+'_with_yaml_parameters.csv')
             apt = apt_inputs.AptInput()
             apt.input_xml = self.input_xml
             apt.pointing_file = self.pointing_file
             apt.siaf = self.siaf
-            #apt.epoch_list = self.epoch_list
             apt.observation_table = self.observation_table
             apt.create_input_table()
             self.info = apt.exposure_tab
@@ -210,7 +223,10 @@ class SimInput:
             #and subpixel dithers
             tot_dith = np.int(file_dict['dither'])
             primarytot = np.int(file_dict['PrimaryDithers'])
-            subpixtot = np.int(file_dict['SubpixelPositions'])
+            try:
+                subpixtot = np.int(file_dict['SubpixelPositions'])
+            except:
+                subpixtot = np.int(file_dict['SubpixelPositions'][0])
             primary_dither = np.ceil(1.*tot_dith/subpixtot)
             subpix_dither = tot_dith - (primary_dither * primarytot * subpixtot - subpixtot)
             file_dict['primary_dither_num'] = primary_dither
@@ -491,7 +507,8 @@ class SimInput:
             mode = self.info['Mode'][i]
             dither = str(self.info['dither'][i]).zfill(2)
             onames.append(os.path.abspath(os.path.join(self.output_dir,'Act{}_{}_{}_Dither{}.yaml'.format(act,det,mode,dither))))
-            fnames.append(os.path.abspath(os.path.join(self.output_dir,'Act{}_{}_{}_Dither{}_uncal.fits'.format(act,det,mode,dither))))
+            #fnames.append(os.path.abspath(os.path.join(self.output_dir,'Act{}_{}_{}_Dither{}_uncal.fits'.format(act,det,mode,dither))))
+            fnames.append('Act{}_{}_{}_Dither{}_uncal.fits'.format(act,det,mode,dither))
         self.info['yamlfile'] = onames
         self.info['outputfits'] = fnames
         
@@ -544,8 +561,8 @@ class SimInput:
             yamlout = input['yamlfile']
         else:
             outtf = True
-            outfile = input['observation_id'] + '_' + input['detector'] + '_uncal.fits'
-            yamlout = input['observation_id'] + '_' + input['detector'] + '.yaml'
+            outfile = input['observation_id'] + '_' + input['detector'] + '_' + input[filtkey] + '_uncal.fits'
+            yamlout = input['observation_id'] + '_' + input['detector'] + '_' + input[filtkey] + '.yaml'
             
         with open(yamlout,'w') as f:
             f.write('Inst:\n')
@@ -645,6 +662,7 @@ class SimInput:
             f.write('\n')
             f.write('Output:\n')
             #f.write('  use_stsci_output_name: {} #Output filename should follow STScI naming conventions (True/False)\n'.format(outtf))
+            f.write('  directory: {}  #Output directory\n'.format(self.output_dir))
             f.write('  file: {}   #Output filename\n'.format(outfile))
             f.write('  format: DMS          #Output file format Options: DMS, SSR(not yet implemented)\n')
             f.write('  save_intermediates: False   #Save intermediate products separately (point source image, etc)\n')
@@ -673,7 +691,14 @@ class SimInput:
             f.write("  total_primary_dither_positions: {}  #Total number of primary dither positions\n".format(input['PrimaryDithers']))
             f.write("  primary_dither_position: {}  #Primary dither position number\n".format(np.int(input['primary_dither_num'])))
             f.write("  subpix_dither_type: {}  #Subpixel dither pattern name\n".format(input['SubpixelDitherType']))
-            f.write("  total_subpix_dither_positions: {}  #Total number of subpixel dither positions\n".format(input['SubpixelPositions']))
+            # For WFSS we need to strip out the '-Points' from
+            # the number of subpixel positions entry
+            try:
+                dash = input['SubpixelPositions'].find('-')
+                val = input['SubpixelPositions'][0:dash]
+            except:
+                val = input['SubpixelPositions']
+            f.write("  total_subpix_dither_positions: {}  #Total number of subpixel dither positions\n".format(val))
             f.write("  subpix_dither_position: {}  #Subpixel dither position number\n".format(np.int(input['subpix_dither_num'])))
             f.write("  xoffset: {}  #Dither pointing offset in x (arcsec)\n".format(input['idlx']))
             f.write("  yoffset: {}  #Dither pointing offset in y (arcsec)\n".format(input['idly']))            
@@ -777,7 +802,7 @@ class SimInput:
         parser.add_argument("--pointing_file",help='Pointing file from APT describing observations.')
         parser.add_argument("--siaf",help='CSV version of SIAF. Needed only in conjunction with input_xml+pointing.')
         parser.add_argument("--output_dir",help='Directory into which the yaml files are output',default='./')
-        parser.add_argument("--table_file",help='Ascii table containing observation info. Use this or xml+pointing+siaf files.')
+        parser.add_argument("--table_file",help='Ascii table containing observation info. Use this or xml+pointing+siaf files.',default=None)
         parser.add_argument("--use_nonstsci_names",help="Use STScI naming convention for output files",action='store_true')
         parser.add_argument("--subarray_def_file",help="Ascii file containing subarray definitions",default=None)
         parser.add_argument("--readpatt_def_file",help='Ascii file containing readout pattern definitions',default=None)

@@ -62,6 +62,10 @@ class RampSim():
         #read in the parameter file
         self.readParameterFile()
 
+        # expand locations in the parameter
+        # file to be full paths
+        self.fullPaths()
+
         #if the user requests that a linearized dark be used
         #rather than a raw dark, then set the use_JWST_pipeline
         #option to false
@@ -100,44 +104,11 @@ class RampSim():
         #the proposed output integration
         self.dataVolumeCheck(self.dark)
 
-        print("After volume check:")
-        print(self.dark.data[0,0:3,400,400])
+        #print("After volume check:")
+        #print(self.dark.data[0,0:3,400,400])
 
         
-        print("After volume check:")
-
-
-        try:
-            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
-        except:
-            print('Read raw dark, data extension not present!!')
-
-        try:
-            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
-        except:
-            print('Read raw dark, zeroframe extension not present!!')
-
-        try:
-            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
-        except:
-            print('Read raw dark, sbAndRefpix extension not present!!')
-
-            
-        try:
-            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
-        except:
-            print('Read linear dark, data extension not present!!')
-
-        try:
-            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
-        except:
-            print('Read linear dark, zeroframe extension not present!!')
-
-        try:
-            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
-        except:
-            print('Read linear dark, sbAndRefpix extension not present!!')
-            
+        #print("After volume check:")
 
         #compare the requested number of integrations to the number
         #of integrations in the input dark
@@ -149,86 +120,11 @@ class RampSim():
         print(self.dark.data[0,0:3,400,400])
 
 
-        
-        print("After darkints:")
-
-        try:
-            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
-        except:
-            print('Read raw dark, data extension not present!!')
-
-        try:
-            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
-        except:
-            print('Read raw dark, zeroframe extension not present!!')
-
-        try:
-            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
-        except:
-            print('Read raw dark, sbAndRefpix extension not present!!')
-
-            
-        try:
-            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
-        except:
-            print('Read linear dark, data extension not present!!')
-
-        try:
-            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
-        except:
-            print('Read linear dark, zeroframe extension not present!!')
-
-        try:
-            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
-        except:
-            print('Read linear dark, sbAndRefpix extension not present!!')
-        
-
-        print("input dark readpattern check: {}".format(self.dark.header['READPATT']))
-
         # Put the input dark (or linearized dark) into the requested
         # readout pattern
         #self.dark,darkzeroframe,sbzeroframe = self.reorderDark(self.dark)
         self.dark,sbzeroframe = self.reorderDark(self.dark)
-        print('DARK has been reordered to {} to match the input readpattern of {}'.
-              format(self.dark.data.shape,self.dark.header['READPATT']))
-
-        print("After reorder:")
-        print(self.dark.data[0,0:3,400,400])
-        
-        print("After reordering:")
-
-        try:
-            print('Read raw dark, data shape: {}'.format(self.dark.data.shape))
-        except:
-            print('Read raw dark, data extension not present!!')
-
-        try:
-            print('Read raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
-        except:
-            print('Read raw dark, zeroframe extension not present!!')
-
-        try:
-            print('Read raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
-        except:
-            print('Read raw dark, sbAndRefpix extension not present!!')
-
-            
-        try:
-            print('Read linear dark, data shape: {}'.format(self.linDark.data.shape))
-        except:
-            print('Read linear dark, data extension not present!!')
-
-        try:
-            print('Read linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
-        except:
-            print('Read linear dark, zeroframe extension not present!!')
-
-        try:
-            print('Read linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
-        except:
-            print('Read linear dark, sbAndRefpix extension not present!!')
-
+        print('DARK has been reordered to {} to match the input readpattern of {}'.format(self.dark.data.shape,self.dark.header['READPATT']))
         
         #If a raw dark was read in, create linearized version here
         #using the SSB pipeline. Better to do this 
@@ -287,52 +183,52 @@ class RampSim():
                 print('cropped #2 the linearized dark current zero frame. {}'.format(zeroModel.data.shape))
 
 
-        try:
-            print('After Pipeline raw dark, data shape: {}'.format(self.dark.data.shape))
-        except:
-            print('After Pipeline raw dark, data extension not present!!')
+        #try:
+        #    print('After Pipeline raw dark, data shape: {}'.format(self.dark.data.shape))
+        #except:
+        #    print('After Pipeline raw dark, data extension not present!!')
 
-        try:
-            print('After Pipeline raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
-        except:
-            print('After Pipeline raw dark, zeroframe extension not present!!')
+        #try:
+        #    print('After Pipeline raw dark, zeroframe shape: {}'.format(self.dark.zeroframe.shape))
+        #except:
+        #    print('After Pipeline raw dark, zeroframe extension not present!!')
 
-        try:
-            print('After Pipeline raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
-        except:
-            print('After Pipeline raw dark, sbAndRefpix extension not present!!')
-
-            
-        try:
-            print('After Pipeline linear dark, data shape: {}'.format(self.linDark.data.shape))
-        except:
-            print('After Pipeline linear dark, data extension not present!!')
-
-        try:
-            print('After Pipeline linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
-        except:
-            print('After Pipeline linear dark, zeroframe extension not present!!')
-
-        try:
-            print('After Pipeline linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
-        except:
-            print('After Pipeline linear dark, sbAndRefpix extension not present!!')
+        #try:
+        #    print('After Pipeline raw dark, sbAndRefpix shape: {}'.format(self.dark.sbAndRefpix.shape))
+        #except:
+        #    print('After Pipeline raw dark, sbAndRefpix extension not present!!')
 
             
-        try:
-            print('After Pipeline zeromodel, data shape: {}'.format(zeroModel.data.shape))
-        except:
-            print('After Pipeline zeromodel, data extension not present!!')
+        #try:
+        #    print('After Pipeline linear dark, data shape: {}'.format(self.linDark.data.shape))
+        #except:
+        #    print('After Pipeline linear dark, data extension not present!!')
 
-        try:
-            print('After Pipeline zeromodel, zeroframe shape: {}'.format(zeroModel.zeroframe.shape))
-        except:
-            print('After Pipeline zeromodel, zeroframe extension not present!!')
+        #try:
+        #    print('After Pipeline linear dark, zeroframe shape: {}'.format(self.linDark.zeroframe.shape))
+        #except:
+        #    print('After Pipeline linear dark, zeroframe extension not present!!')
 
-        try:
-            print('After Pipeline zeromodel, sbAndRefpix shape: {}'.format(zeroModel.sbAndRefpix.shape))
-        except:
-            print('After Pipeline zeromodel, sbAndRefpix extension not present!!')
+        #try:
+        #    print('After Pipeline linear dark, sbAndRefpix shape: {}'.format(self.linDark.sbAndRefpix.shape))
+        #except:
+        #    print('After Pipeline linear dark, sbAndRefpix extension not present!!')
+
+            
+        #try:
+        #    print('After Pipeline zeromodel, data shape: {}'.format(zeroModel.data.shape))
+        #except:
+        #    print('After Pipeline zeromodel, data extension not present!!')
+
+        #try:
+        #    print('After Pipeline zeromodel, zeroframe shape: {}'.format(zeroModel.zeroframe.shape))
+        #except:
+        #    print('After Pipeline zeromodel, zeroframe extension not present!!')
+
+        #try:
+        #    print('After Pipeline zeromodel, sbAndRefpix shape: {}'.format(zeroModel.sbAndRefpix.shape))
+        #except:
+        #    print('After Pipeline zeromodel, sbAndRefpix extension not present!!')
 
 #        print("self.dark after pipeline: {} {} {}".format(self.dark.data.shape,self.dark.zeroframe.shape,self.dark.sbAndRefpix.shape))
 #        try:
@@ -348,14 +244,15 @@ class RampSim():
             h1 = fits.ImageHDU(self.linDark.data)
             h2 = fits.ImageHDU(zeroModel.data)
             hl=fits.HDUList([h0,h1,h2])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
-
+            #hl.writeto(self.params['Output']['file'][0:-5] + '_linearizedDark.fits',overwrite=True)
+            hl.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_linearizedDark.fits'),overwrite=True)
+            
         #save the cropped dark for testing
         if self.params['Output']['save_intermediates']:
             h0=fits.PrimaryHDU()
             h1 = fits.ImageHDU(self.dark.data)
             hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_croppedDark.fits',overwrite=True)
+            hl.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_croppedDark.fits'),overwrite=True)
 
         print("After cropping to subarrays, the shapes of self.dark, self.linDark are: {},{}"
               .format(self.dark.data.shape,self.linDark.data.shape))
@@ -439,10 +336,10 @@ class RampSim():
                 mtt_zero_list.append(mtt_galaxies_zero)
                 print("Done with creating moving targets from {}".format(self.params['simSignals']['galaxyListFile']))
 
-                hh00 = fits.PrimaryHDU(mtt_galaxies)
-                hhllist = fits.HDUList([hh00])
-                hhllist.writeto('junk.fits',overwrite=True)
-                print('Moving target ramp with galaxies only written to junk.fits')
+                #hh00 = fits.PrimaryHDU(mtt_galaxies)
+                #hhllist = fits.HDUList([hh00])
+                #hhllist.writeto('junk.fits',overwrite=True)
+                #print('Moving target ramp with galaxies only written to junk.fits')
 
             if self.runStep['extendedsource']:
                 mtt_ext = self.movingTargetInputs(self.params['simSignals']['extended'],'extended',MT_tracking=True,tracking_ra_vel=ra_vel,tracking_dec_vel=dec_vel,trackingPixVelFlag=vel_flag)
@@ -509,7 +406,7 @@ class RampSim():
                 h0=fits.PrimaryHDU()
                 h1 = fits.ImageHDU(signalramp)
                 hl=fits.HDUList([h0,h1])
-                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_plus_movingtargs_ramp.fits',overwrite=True)
+                hl.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_noiseless_static_plus_movingtargs_ramp.fits'),overwrite=True)
                 print('Ramp of static plus moving target simulated sources saved to {}'.format(self.params['Output']['file'][0:-5] + '_noiseless_static_plus_movingtargs_ramp.fits'))
 
 
@@ -532,7 +429,7 @@ class RampSim():
                 h0=fits.PrimaryHDU()
                 h1 = fits.ImageHDU(signalramp)
                 hl=fits.HDUList([h0,h1])
-                hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_static_targets_ramp.fits',overwrite=True)
+                hl.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_noiseless_static_targets_ramp.fits'),overwrite=True)
 
 
         #ILLUMINATION FLAT
@@ -620,7 +517,7 @@ class RampSim():
             h0=fits.PrimaryHDU()
             h1 = fits.ImageHDU(signalramp)
             hl=fits.HDUList([h0,h1])
-            hl.writeto(self.params['Output']['file'][0:-5] + '_noiseless_sources_plus_det_effects_ramp.fits',overwrite=True)
+            hl.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_noiseless_sources_plus_det_effects_ramp.fits'),overwrite=True)
 
 
         #If grism direct data is requested, then save the signal 
@@ -707,12 +604,36 @@ class RampSim():
             self.saveDMS(final_ramp,final_zero,self.params['Output']['file'])
         else:
             print("Saving exposure in DMS format using astropy.")
-            self.savefits(final_ramp,final_zero,self.params['Output']['file'])
+            self.savefits(final_ramp,final_zero,os.path.join(self.params['Output']['directory'],self.params['Output']['file']))
 
         #query the engineering database in order to popularte basic WCS info
-        set_telescope_pointing.add_wcs(self.params['Output']['file'],roll=self.params['Telescope']['rotation'])
+        set_telescope_pointing.add_wcs(os.path.join(self.params['Output']['directory'],self.params['Output']['file']),roll=self.params['Telescope']['rotation'])
         
 
+    def fullPaths(self):
+        # Expand all input paths to be full paths
+        # This is to allow for easier Condor-ization of
+        # many runs
+        pathdict = {'Reffiles':['dark','linearized_darkfile','hotpixmask','superbias',
+                                'subarray_defs','readpattdefs','linearity',
+                                'saturation','gain','phot','pixelflat',
+                                'illumflat','astrometric','distortion_coeffs','ipc',
+                                'crosstalk','occult','filtpupilcombo','pixelAreaMap',
+                                'flux_cal'],
+                    'cosmicRay':['path'],
+                    'simSignals':['pointsource','psfpath','galaxyListFile','extended',
+                                  'movingTargetList','movingTargetSersic',
+                                  'movingTargetExtended','movingTargetToTrack'],
+                    'newRamp':['dq_configfile','sat_configfile','superbias_configfile',
+                               'refpix_configfile','linear_configfile'],
+                    'Output':['file','directory']}
+
+        for key1 in pathdict:
+            for key2 in pathdict[key1]:
+                if self.params[key1][key2].lower() != 'none':
+                    self.params[key1][key2] = os.path.abspath(self.params[key1][key2])
+
+        
     def getAttitudeMatrix(self):
         #create an attitude_matrix from the distortion reference file model and other info
         #calculate a local roll angle for the aperture
@@ -828,9 +749,9 @@ class RampSim():
             meta2 = 'Point sources with non-sidereal tracking. File produced by ramp_simulator.py'
             meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
             ptsrc.meta['comments'] = [meta0,meta1,meta2,meta3]
-            ptsrc.write('temp_non_sidereal_point_sources.list',format='ascii',overwrite=True)
+            ptsrc.write(os.path.join(self.params['Output']['directory'],'temp_non_sidereal_point_sources.list'),format='ascii',overwrite=True)
 
-            ptsrc = self.getPointSourceList('temp_non_sidereal_point_sources.list')
+            ptsrc = self.getPointSourceList(os.path.join(self.params['Output']['directory'],'temp_non_sidereal_point_sources.list'))
             ptsrcCRImage = self.makePointSourceImage(ptsrc)
             totalCRList.append(ptsrcCRImage)
 
@@ -847,7 +768,7 @@ class RampSim():
             meta2 = 'Galaxies (2d sersic profiles) with non-sidereal tracking. File produced by ramp_simulator.py'
             meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
             galaxies.meta['comments'] = [meta0,meta1,meta2,meta3]
-            galaxies.write('temp_non_sidereal_sersic_sources.list',format='ascii',overwrite=True)
+            galaxies.write(os.path.join(self.params['Output']['directory'],'temp_non_sidereal_sersic_sources.list'),format='ascii',overwrite=True)
             
             #read in the PSF file with centered source
             wfe = self.params['simSignals']['psfwfe']
@@ -889,7 +810,7 @@ class RampSim():
             meta2 = 'Extended sources with non-sidereal tracking. File produced by ramp_simulator.py'
             meta3 = 'from run using non-sidereal moving target list {}.'.format(self.params['simSignals']['movingTargetToTrack'])
             extended.meta['comments'] = [meta0,meta1,meta2,meta3]
-            extended.write('temp_non_sidereal_extended_sources.list',format='ascii',overwrite=True)
+            extended.write(os.path.join(self.params['Output']['directory'],'temp_non_sidereal_extended_sources.list'),format='ascii',overwrite=True)
             
             #read in the PSF file with centered source
             wfe = self.params['simSignals']['psfwfe']
@@ -975,7 +896,10 @@ class RampSim():
 
         #Get the photflambda and photfnu values that go with
         #the filter
-        module = fits.getval(self.params['Reffiles']['dark'],'module')
+        try:
+            module = fits.getval(self.params['Reffiles']['linearized_darkfile'],'module')
+        except:
+            module = fits.getval(self.params['Reffiles']['dark'],'module')
         
         zps = ascii.read(self.params['Reffiles']['flux_cal'])
         if self.params['Readout']['pupil'][0] == 'F':
@@ -1001,7 +925,7 @@ class RampSim():
             g,yd,xd = arrayshape
             tgroup = self.frametime*(self.params['Readout']['nframe']+self.params['Readout']['nskip'])
             
-        grismDirectName = self.params['Output']['file'][0:-5] + '_GrismDirectData.fits'
+        grismDirectName = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_' + self.params['Readout']['filter'] + '_GrismDirectData.fits')
         xcent_fov = xd / 2
         ycent_fov = yd / 2
         kw = {}
@@ -1371,7 +1295,7 @@ class RampSim():
 
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
-            synthName = self.params['Output']['file'][0:-5] + '_LinearSyntheticSignalRamp.fits'
+            synthName = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_LinearSyntheticSignalRamp.fits')
             #self.saveSingleFits(syn_linear_ramp,synthName)
             h0 = fits.PrimaryHDU()
             h1 = fits.ImageHDU(syn_linear_ramp)
@@ -1396,7 +1320,7 @@ class RampSim():
 
         #if intermediate products are being saved, save the synthetic signal ramp
         if self.params['Output']['save_intermediates']:
-            synthName2 = self.params['Output']['file'][0:-5] + '_LinearSyntheticPlusDarkSignalRamp.fits'
+            synthName2 = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_LinearSyntheticPlusDarkSignalRamp.fits')
             #self.saveSingleFits(lin_outramp,synthName2)
             h0 = fits.PrimaryHDU()
             h1 = fits.ImageHDU(lin_outramp)
@@ -1445,7 +1369,7 @@ class RampSim():
 
         #check
         if self.params['Output']['save_intermediates']:
-            propername = self.params['Output']['file'][0:-5] + '_nonlinearized_combined_ramp.fits'
+            propername = os.path.join(self.params['Output']['direcotry'],self.params['Output']['file'][0:-5] + '_nonlinearized_combined_ramp.fits')
             h0 = fits.PrimaryHDU()
             h1 = fits.ImageHDU(properramp)
             h2 = fits.ImageHDU(properzero)
@@ -1473,7 +1397,7 @@ class RampSim():
 
         #check
         if self.params['Output']['save_intermediates']:
-            propername = self.params['Output']['file'][0:-5] + '_nonlinearized_integerized_combined_ramp.fits'
+            propername = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_nonlinearized_integerized_combined_ramp.fits')
             h0 = fits.PrimaryHDU()
             h1 = fits.ImageHDU(properramp)
             h2 = fits.ImageHDU(properzero)
@@ -1992,7 +1916,7 @@ class RampSim():
         outModel[0].header['RADESYS'] = 'ICRS'
 
         outModel[0].header['ORIGIN'] = 'STScI'
-        outModel[0].header['FILENAME'] = filename
+        outModel[0].header['FILENAME'] = os.path.split(filename)[1]
         outModel[0].header['FILETYPE'] = 'raw'
         outModel[0].header['OBS_ID'] = self.params['Output']['obs_id'] 
         outModel[0].header['VISIT_ID'] = self.params['Output']['visit_id'] 
@@ -2215,7 +2139,7 @@ class RampSim():
                 h1 = fits.ImageHDU(mod_ramp)
                 h2 = fits.ImageHDU(zero)
                 hlist = fits.HDUList([h0,h1,h2])
-                hlist.writeto(self.params['Output']['file'][0:-5] + '_simulatedSources_RAPIDramp.fits',overwrite=True)
+                hlist.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_simulatedSources_RAPIDramp.fits'),overwrite=True)
                 
             #rearrange ramp into the requested readout pattern, to match crs_only_ramp
             if self.params['Readout']['readpatt'].upper() != 'RAPID':
@@ -2238,7 +2162,7 @@ class RampSim():
             h0t=fits.PrimaryHDU(final_ramp)
             h1t=fits.ImageHDU(final_zero)
             hllt=fits.HDUList([h0t,h1t])
-            hllt.writeto(self.params['Output']['file'][0:-5]+'_rearranged_source_ramp.fits',overwrite=True)
+            hllt.writeto(os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5]+'_rearranged_source_ramp.fits'),overwrite=True)
             
         return final_ramp,final_zero
 
@@ -2756,7 +2680,7 @@ class RampSim():
                 #located on the detector, and don't seem to be correlated with point source
                 #locations.
                 if i == self.params['nonlin']['maxiter'] and self.params['Output']['save_intermediates']:
-                    ofile = self.params['Output']['file'][0:-5] + '_doNonLin_accuracy.fits'
+                    ofile = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_doNonLin_accuracy.fits')
                     devcheck = np.copy(dev)
                     devcheck[i2] = -1.
                     h0 = fits.PrimaryHDU()
@@ -3331,7 +3255,7 @@ class RampSim():
             
             #save the point source image for examination by user
             if self.params['Output']['save_intermediates'] == True:
-                psfImageName = self.params['Output']['file'][0:-5] + '_pointSourceRateImage_elec_per_sec.fits'
+                psfImageName = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_pointSourceRateImage_elec_per_sec.fits')
                 self.saveSingleFits(psfimage,psfImageName)
                 print("Point source image saved as {}".format(psfImageName))
                 
@@ -3346,7 +3270,7 @@ class RampSim():
 
             #save the galaxy image for examination by the user
             if self.params['Output']['save_intermediates'] == True:
-                galImageName = self.params['Output']['file'][0:-5] + '_galaxyRateImage_elec_per_sec.fits'
+                galImageName = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_galaxyRateImage_elec_per_sec.fits')
                 self.saveSingleFits(galaxyCRImage,galImageName)
                 print("Simulated galaxy image saved as {}".format(galImageName))
 
@@ -3398,7 +3322,7 @@ class RampSim():
         #Save the final rate image of added signals
         if self.params['Output']['save_intermediates'] == True:
             #rateImageName = self.params['Output']['file'][0:-5] + '_AddedSourcesPlusDetectorEffectsRateImage_elec_per_sec.fits'
-            rateImageName = self.params['Output']['file'][0:-5] + '_AddedSources_elec_per_sec.fits'
+            rateImageName = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_AddedSources_elec_per_sec.fits')
             self.saveSingleFits(signalimage,rateImageName)
             print("Signal rate image of all added sources (plus flats and IPC applied if requested) saved as {}".format(rateImageName))
 
@@ -3834,7 +3758,7 @@ class RampSim():
         #save the crosstalk correction image
         if self.params['Output']['save_intermediates'] == True:
             phdu = fits.PrimaryHDU(xtalk_corr_im)
-            xtalkout = self.params['Output']['file'][0:-5] + '_xtalk_correction_image.fits'
+            xtalkout = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_xtalk_correction_image.fits')
             phdu.writeto(xtalkout,overwrite=True)
 
         return xtalk_corr_im
@@ -5174,7 +5098,7 @@ class RampSim():
 
         #Write the results to a file
         filteredList.meta['comments'] = ["Field center (degrees): %13.8f %14.8f y axis rotation angle (degrees): %f  image size: %4.4d %4.4d\n" % (self.ra,self.dec,self.params['Telescope']['rotation'],nx,ny)]
-        filteredOut = self.params['Output']['file'][0:-5] + '_galaxySources.list'
+        filteredOut = os.path.join(self.params['Output']['directory'],self.params['Output']['file'][0:-5] + '_galaxySources.list')
         filteredList.write(filteredOut,format='ascii',overwrite=True)
 
         print(filteredList)
@@ -5665,8 +5589,8 @@ class RampSim():
 
             siaf_row = siaf[match]
 
-            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
-            #self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(siaf_row,ap_name,to_system='ideal')
+            #self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(self.params['Reffiles']['distortion_coeffs'],ap_name,to_system='ideal')
+            self.v2v32idlx, self.v2v32idly = read_siaf_table.get_siaf_v2v3_transform(siaf_row,ap_name,to_system='ideal')
             
         #convert the input RA and Dec of the pointing position into floats
         #check to see if the inputs are in decimal units or hh:mm:ss strings

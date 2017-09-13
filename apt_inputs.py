@@ -50,17 +50,6 @@ import yaml
 import rotations
 import set_telescope_pointing_separated as set_telescope_pointing
 
-#try to find set_telescope_pointing.py
-#try:
-#    import imp
-#    conda_path = os.environ['CONDA_PREFIX']
-#    set_telescope_pointing = imp.load_source('set_telescope_pointing', os.path.join(conda_path, 'bin/set_telescope_pointing.py'))
-#    stp_flag = True
-#except:
-#    print('WARNING: cannot find set_telescope_pointing.py. This is needed')
-#    print('to translate telescope roll angle to local roll angle.')
-#    sys.exit()
-    
 class AptInput:
     def __init__(self):
         self.input_xml = '' #e.g. 'GOODSS_ditheredDatasetTest.xml'
@@ -236,10 +225,10 @@ class AptInput:
                         grismval = ['GRISMR','GRISMC']
                     else:
                         grismval = [grismval]
-                    pdithtype = wfss_temp.find(ncwfss+'PrimaryDitherType').text
-                    pdither = wfss_temp.find(ncwfss+'PrimaryDithers').text
-                    sdither = wfss_temp.find(ncwfss+'SubpixelPositions').text
-                    sdithtype = wfss_temp.find(ncwfss+'SubpixelPositions').text
+                    #pdithtype = wfss_temp.find(ncwfss+'PrimaryDitherType').text
+                    #pdither = wfss_temp.find(ncwfss+'PrimaryDithers').text
+                    #sdither = wfss_temp.find(ncwfss+'SubpixelPositions').text
+                    #sdithtype = wfss_temp.find(ncwfss+'SubpixelPositions').text
                     explist = wfss_temp.find(ncwfss+'ExposureList')
                     expseqs = explist.findall(ncwfss+'ExposureSequences')
             
@@ -262,6 +251,12 @@ class AptInput:
                             groups = grismexp.find(ncwfss+'Groups').text
                             integrations = grismexp.find(ncwfss+'Integrations').text
 
+                            pdithtype = wfss_temp.find(ncwfss+'PrimaryDitherType').text
+                            pdither = wfss_temp.find(ncwfss+'PrimaryDithers').text
+                            sdither = wfss_temp.find(ncwfss+'SubpixelPositions').text
+                            sdithtype = wfss_temp.find(ncwfss+'SubpixelPositions').text
+
+                            
                             #separate pupil and filter in case of filter
                             #that is mounted in the pupil wheel
                             if '+' in sfilt:
@@ -275,9 +270,10 @@ class AptInput:
                             tup_to_add = (piname,propid,proptitle,propcat,
                                           scicat,typeflag,mod,subarr,
                                           pdithtype,pdither,sdithtype,
-                                          sdither,sfilt,lfilt,rpatt,grps,
-                                          ints,short_pupil,long_pupil,
+                                          sdither,sfilt,lfilt,rpatt,groups,
+                                          integrations,short_pupil,long_pupil,
                                           grismvalue,coordparallel)
+
                             dict = self.add_exposure(dict,tup_to_add)
                             obs_tuple_list.append(tup_to_add)
                             
@@ -721,7 +717,7 @@ class AptInput:
         return finalList
 
 
-    def expand_for_dithers(self,dict):
+    def expand_for_dithers(self,indict):
         #Expand a given dictionary to create one entry
         #for each dither
         #define the dictionary to hold the expanded entries
@@ -730,25 +726,34 @@ class AptInput:
         #numbers to 1, to avoid confusion.
         
         expanded = {}
-        for key in dict:
+        for key in indict:
             expanded[key] = []
     
         #loop over entries in dict and duplicate by the
         #number of dither positions  
-        keys = np.array(dict.keys())
-        for i in range(len(dict['PrimaryDithers'])):
-            entry = np.array([item[i] for item in dict.values()])
-            subpix = entry[keys == 'SubpixelPositions']
+        keys = np.array(indict.keys())
+        for i in range(len(indict['PrimaryDithers'])):
+            #entry = np.array([item[i] for item in dict.values()])
+            arr = np.array([item[i] for item in indict.values()])
+            entry = dict(zip(keys,arr))
+            
+            #subpix = entry[keys == 'SubpixelPositions']
+            subpix = entry['SubpixelPositions']
             if subpix == '0':
                 subpix = [[1]]
+            if subpix == '4-Point':
+                subpix = [[4]]
+            if subpix == '9-Point':
+                subpix = [[9]]
             #in WFSS, SubpixelPositions will be either '4-Point' or '9-Point'
-            primary = entry[keys == 'PrimaryDithers']
+            #primary = entry[keys == 'PrimaryDithers']
+            primary = entry['PrimaryDithers']
             if primary == '0':
                 primary = [1]
             reps = np.int(subpix[0][0]) * np.int(primary[0])
             for key in keys:
                 for j in range(reps):
-                    expanded[key].append(dict[key][i])
+                    expanded[key].append(indict[key][i])
         return expanded
 
     
@@ -842,7 +847,14 @@ class AptInput:
                             exnum = str(elements[2]).zfill(5)
                             exp.append(exnum)
                             dith.append(np.int(elements[3]))
-                            aperture.append(elements[4])
+
+                            ap = elements[4]
+                            if ('GRISMR_WFSS' in elements[4]):
+                                ap = ap.replace('GRISMR_WFSS','FULL')
+                            elif ('GRISMC_WFSS' in elements[4]):
+                                ap = ap.replace('GRISMC_WFSS','FULL')
+                            
+                            aperture.append(ap)
                             targ1.append(np.int(elements[5]))
                             targ2.append(elements[6])
                             ra.append(elements[7])
@@ -864,7 +876,7 @@ class AptInput:
                             act_counter += 1
                     except:
                         pass
-
+                    
         pointing = {'exposure':exp, 'dither':dith, 'aperture':aperture,
                     'targ1':targ1, 'targ2':targ2, 'ra':ra, 'dec':dec,
                     'basex':basex, 'basey':basey, 'dithx':dithx,
@@ -967,19 +979,34 @@ class AptInput:
 
         
     def create_input_table(self):
+        # Expand paths to full paths
+        self.input_xml = os.path.abspath(self.input_xml)
+        self.pointing_file = os.path.abspath(self.pointing_file)
+        self.siaf = os.path.abspath(self.siaf)
+        if self.output_csv is not None:
+            self.output_csv = os.path.abspath(self.output_csv)
+        if self.observation_table is not None:
+            self.observation_table = os.path.abspath(self.observation_table)
+            
         #read in xml file using the new function
         tab = self.read_xml(self.input_xml)
-                
+
+        ascii.write(Table(tab), 'as_read_in.csv', format='csv', overwrite=True)
+        
         #expand the dictionary for multiple dithers. Expand such that there
         #is one entry in each list for each exposure, rather than one entry
         #for each set of dithers
         xmltab = self.expand_for_dithers(tab)
 
+        #ascii.write(Table(xmltab), 'expand_for_dithers.csv', format='csv', overwrite=True)
+        
         #read in the pointing file and produce dictionary
         pointing_tab = self.get_pointing_info(self.pointing_file,xmltab['ProposalID'][0])
-
+        
         #combine the dictionaries
         obstab = self.combine_dicts(xmltab,pointing_tab)
+
+        #ascii.write(Table(obstab), 'add_pointing_info.csv', format='csv', overwrite=True)
 
         #add epoch information
         #obstab = self.add_epochs(obstab)
@@ -988,11 +1015,14 @@ class AptInput:
         obstab = self.add_observation_info(obstab)
         
         #test - look at epoch output
-        #ascii.write(Table(obstab), 'test_epoch_output.csv', format='csv', overwrite=True)
-        
+        #ascii.write(Table(obstab), 'add_epoch_info.csv', format='csv', overwrite=True)
+        #stop
         #expand for detectors. Create one entry in each list for each
         #detector, rather than a single entry for 'ALL' or 'BSALL'
         self.exposure_tab = self.expand_for_detectors(obstab)
+
+        #ascii.write(Table(self.exposure_tab), 'expand_for_detectors.csv', format='csv', overwrite=True)
+
         
         #calculate the correct V2,V3 and RA,Dec for each exposure/detector
         self.ra_dec_update()
@@ -1000,7 +1030,7 @@ class AptInput:
         #output to a csv file. 
         if self.output_csv is None:
             indir,infile = os.path.split(self.input_xml)
-            self.output_csv = 'Observation_table_for_'+infile+'.csv'
+            self.output_csv = os.path.join(indir,'Observation_table_for_'+infile+'.csv')
         ascii.write(Table(self.exposure_tab), self.output_csv, format='csv', overwrite=True)
         print('Final csv exposure list written to {}'.format(self.output_csv))
 
@@ -1044,7 +1074,23 @@ class AptInput:
         obs_lw_movconv = []
         obs_lw_solarsys = []
         obs_lw_bkgd = []
-        
+
+        # This will allow the filter values
+        # in the observation table to override
+        # what comes from APT. This is useful for
+        # WFSS observations, where you want to create
+        # 'direct images' in various filters to hand
+        # to the disperser software in order to create
+        # simulated dispersed data. In that case, you
+        # would need to create 'direct images' using
+        # several filters inside the filter listed in APT
+        # in order to get broadband colors to disperse.
+        # If filter names are present in the observation
+        # yaml file, then they will be used. If not, the
+        # filters from APT will be kept
+        obs_sw_filt = []
+        obs_lw_filt = []
+
         for obs in intab['obs_label']:
             match = np.where(obs == onames)[0]
             if len(match) == 0:
@@ -1055,33 +1101,41 @@ class AptInput:
             else:
                 #print('Matching {} from xml with {} from observation listfile'.format(obs,onames[match[0]]))
                 obslist = self.obstab['Observation{}'.format(match[0]+1)]
-                #print(type(obslist['Date']))
-                #stop
-                #obs_start.append(obslist['Date'])
                 obs_start.append(obslist['Date'].strftime('%Y-%m-%d'))
                 obs_pav3.append(obslist['PAV3'])
-                obs_sw_ptsrc.append(obslist['SWFilter']['PointSourceCatalog'])
-                obs_sw_galcat.append(obslist['SWFilter']['GalaxyCatalog'])
-                obs_sw_ext.append(obslist['SWFilter']['ExtendedCatalog'])
-                obs_sw_extscl.append(obslist['SWFilter']['ExtendedScale'])
-                obs_sw_extcent.append(obslist['SWFilter']['ExtendedCenter'])
-                obs_sw_movptsrc.append(obslist['SWFilter']['MovingTargetList'])
-                obs_sw_movgal.append(obslist['SWFilter']['MovingTargetSersic'])
-                obs_sw_movext.append(obslist['SWFilter']['MovingTargetExtended'])
-                obs_sw_movconv.append(obslist['SWFilter']['MovingTargetConvolveExtended'])
-                obs_sw_solarsys.append(obslist['SWFilter']['MovingTargetToTrack'])
-                obs_sw_bkgd.append(obslist['SWFilter']['BackgroundRate'])
-                obs_lw_ptsrc.append(obslist['LWFilter']['PointSourceCatalog'])
-                obs_lw_galcat.append(obslist['LWFilter']['GalaxyCatalog'])
-                obs_lw_ext.append(obslist['LWFilter']['ExtendedCatalog'])
-                obs_lw_extscl.append(obslist['LWFilter']['ExtendedScale'])
-                obs_lw_extcent.append(obslist['LWFilter']['ExtendedCenter'])
-                obs_lw_movptsrc.append(obslist['LWFilter']['MovingTargetList'])
-                obs_lw_movgal.append(obslist['LWFilter']['MovingTargetSersic'])
-                obs_lw_movext.append(obslist['LWFilter']['MovingTargetExtended'])
-                obs_lw_movconv.append(obslist['LWFilter']['MovingTargetConvolveExtended'])
-                obs_lw_solarsys.append(obslist['LWFilter']['MovingTargetToTrack'])
-                obs_lw_bkgd.append(obslist['LWFilter']['BackgroundRate'])
+                obs_sw_ptsrc.append(obslist['SW']['PointSourceCatalog'])
+                obs_sw_galcat.append(obslist['SW']['GalaxyCatalog'])
+                obs_sw_ext.append(obslist['SW']['ExtendedCatalog'])
+                obs_sw_extscl.append(obslist['SW']['ExtendedScale'])
+                obs_sw_extcent.append(obslist['SW']['ExtendedCenter'])
+                obs_sw_movptsrc.append(obslist['SW']['MovingTargetList'])
+                obs_sw_movgal.append(obslist['SW']['MovingTargetSersic'])
+                obs_sw_movext.append(obslist['SW']['MovingTargetExtended'])
+                obs_sw_movconv.append(obslist['SW']['MovingTargetConvolveExtended'])
+                obs_sw_solarsys.append(obslist['SW']['MovingTargetToTrack'])
+                obs_sw_bkgd.append(obslist['SW']['BackgroundRate'])
+                obs_lw_ptsrc.append(obslist['LW']['PointSourceCatalog'])
+                obs_lw_galcat.append(obslist['LW']['GalaxyCatalog'])
+                obs_lw_ext.append(obslist['LW']['ExtendedCatalog'])
+                obs_lw_extscl.append(obslist['LW']['ExtendedScale'])
+                obs_lw_extcent.append(obslist['LW']['ExtendedCenter'])
+                obs_lw_movptsrc.append(obslist['LW']['MovingTargetList'])
+                obs_lw_movgal.append(obslist['LW']['MovingTargetSersic'])
+                obs_lw_movext.append(obslist['LW']['MovingTargetExtended'])
+                obs_lw_movconv.append(obslist['LW']['MovingTargetConvolveExtended'])
+                obs_lw_solarsys.append(obslist['LW']['MovingTargetToTrack'])
+                obs_lw_bkgd.append(obslist['LW']['BackgroundRate'])
+
+                # Override filters if given
+                try:
+                    obs_sw_filt.append(obslist['SW']['Filter'])
+                except:
+                    pass
+                try:
+                    obs_lw_filt.append(obslist['LW']['Filter'])
+                except:
+                    pass
+
         intab['epoch_start_date'] = obs_start
         intab['pav3'] = obs_pav3
         intab['sw_ptsrc'] = obs_sw_ptsrc
@@ -1106,6 +1160,13 @@ class AptInput:
         intab['lw_movconv'] = obs_lw_movconv
         intab['lw_solarsys'] = obs_lw_solarsys
         intab['lw_bkgd'] = obs_lw_bkgd
+
+        # Here we override the filters read from APT
+        # if they are given in the observation yaml file
+        if len(obs_sw_filt) > 0:
+            intab['ShortFilter'] = obs_sw_filt
+        if len(obs_lw_filt) > 0:
+            intab['LongFilter'] = obs_lw_filt
         return intab
     
         
@@ -1159,7 +1220,6 @@ class AptInput:
         parser.add_argument("pointing_file",help='Pointing file from APT describing observations.')
         parser.add_argument("siaf",help='Name of CSV version of SIAF')
         parser.add_argument("--output_csv",help="Name of output CSV file containing list of observations.",default=None)
-        #parser.add_argument("--epoch_list",help='Ascii file containing a list of observations, times, and roll angles',default=None)
         parser.add_argument("--observation_table",help='Ascii file containing a list of observations, times, and roll angles, catalogs',default=None)
         return parser
     
