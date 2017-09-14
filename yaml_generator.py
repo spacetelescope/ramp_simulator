@@ -97,18 +97,7 @@ class SimInput:
         # Main function
 
         # Use full paths for inputs
-        self.input_xml = os.path.abspath(self.input_xml)
-        self.pointing_file = os.path.abspath(self.pointing_file)
-        self.siaf = os.path.abspath(self.siaf)
-        self.output_dir = os.path.abspath(self.output_dir)
-        if self.table_file is not None:
-            self.table_file = os.path.abspath(self.table_file)
-        if self.subarray_def_file is not None:
-            self.subarray_def_file = os.path.abspath(self.subarray_def_file)
-        if self.readpatt_def_file is not None:
-            self.readpatt_def_file = os.path.abspath(self.readpatt_def_file)
-        if self.observation_table is not None:
-            self.observation_table = os.path.abspath(self.observation_table)
+        self.path_defs()
         
         if ((self.input_xml is not None) & (self.pointing_file is not None) & (self.siaf is not None)):
             print('Using {}, {}, and {} to generate observation table.'.
@@ -234,9 +223,44 @@ class SimInput:
             file_dict['siaf'] = self.siaf
             self.write_yaml(file_dict)
 
+    def path_defs(self):
+        # Set full paths for inputs
+        self.input_xml = os.path.abspath(self.input_xml)
+        self.pointing_file = os.path.abspath(self.pointing_file)
+        self.siaf = os.path.abspath(self.siaf)
+        self.output_dir = os.path.abspath(self.output_dir)
+        if self.table_file is not None:
+            self.table_file = os.path.abspath(self.table_file)
+        self.subarray_def_file = self.set_config(self.subarray_def_file,'NIRCam_subarray_definitions.list')
+        self.readpatt_def_file = self.set_config(self.readpatt_def_file,'nircam_read_pattern_definitions.list')
+        self.filtpupil_pairs = self.set_config(self.filtpupil_pairs,'nircam_filter_pupil_pairings.list')
+        self.mag15counts = self.set_config(self.mag15counts,'nircam_mag15_countrates.list')
+        self.fluxcal = self.set_config(self.fluxcal,'NIRCam_zeropoints.list')
+        self.dq_init_config = self.set_config(self.dq_init_config,'dq_init.cfg')
+        self.refpix_config = self.set_config(self.refpix_config,'refpix.cfg')
+        self.saturation_config = self.set_config(self.saturation_config,'saturation.cfg')
+        self.superbias_config = self.set_config(self.superbias_config,'superbias.cfg')
+        self.linearity_config = self.set_config(self.linearity_config,'dq_init.cfg')
+        if self.observation_table is not None:
+            self.observation_table = os.path.abspath(self.observation_table)
+        if self.crosstalk not in [None,'dist']:
+            self.crosstalk = os.path.abspath(self.crosstalk)
+        elif self.crosstalk == 'dist':
+            self.crosstalk = os.path.join(os.path.dirname(os.path.realpath('yaml_generator.py')),'config/xtalk20150303g0.errorcut.txt')
+            
+            
+    def set_config(self,prop,defaultval=None):
+        # If a given file is listed as 'config'
+        # then set it in the yaml output as in
+        # the config subdirectory
+        if prop not in ['config']:
+            prop = os.path.abspath(prop)
+        elif prop == 'config':
+            prop = os.path.join(os.path.dirname(os.path.realpath('yaml_generator.py')),'config/',defaultval)
+        return prop
 
     def add_catalogs(self):
-        #Add list(s) of source catalogs to table
+        # Add list(s) of source catalogs to table
         self.info['point_source'] = [None] * len(self.info['Module'])
         self.info['galaxyListFile'] = [None] * len(self.info['Module'])
         self.info['extended'] = [None] * len(self.info['Module'])
@@ -590,23 +614,23 @@ class SimInput:
             f.write('  linearized_darkfile: {}   # Linearized dark ramp to use as input. Supercedes dark above\n'.format(input['lindark']))
             f.write('  hotpixmask: None                        #Hot pixel mask to go with the dark integration. If none, the script will find hot pixels. Fits file. Ones are hot. Zeros not.\n')
             f.write('  superbias: {}     #Superbias file. Set to None or leave blank if not using\n'.format(input['superbias']))
-            f.write('  subarray_defs: NIRCam_subarray_definitions.list                #File that contains a list of all possible subarray names and coordinates\n')
-            f.write('  readpattdefs: nircam_read_pattern_definitions.list           #File that contains a list of all possible readout pattern names and associated NFRAME/NSKIP values\n')
+            f.write('  subarray_defs: {} #File that contains a list of all possible subarray names and coordinates\n'.format(self.subarray_def_file))
+            f.write('  readpattdefs: {}  #File that contains a list of all possible readout pattern names and associated NFRAME/NSKIP values\n'.format(self.readpatt_def_file))
             f.write('  linearity: {}    #linearity correction coefficients\n'.format(input['linearity']))
             f.write('  saturation: {}    #well depth reference files\n'.format(input['saturation']))
             f.write('  gain: {} #Gain map\n'.format(input['gain']))
-            f.write('  phot: nircam_mag15_countrates.list  #File with list of all filters and associated quantum yield values and countrates for mag 15 star\n')
+            f.write('  phot: {}  #File with list of all filters and associated quantum yield values and countrates for mag 15 star\n'.format(self.mag15counts))
             f.write('  pixelflat: None \n')
             f.write('  illumflat: None                               #Illumination flat field file\n')
             f.write('  astrometric: {}  #Astrometric distortion file (asdf)\n'.format(input['astrometric']))
             f.write('  distortion_coeffs: {}        #CSV file containing distortion coefficients\n'.format(input['siaf']))
             f.write('  ipc: {} #File containing IPC kernel to apply\n'.format(input['ipc']))
             f.write('  invertIPC: True       #Invert the IPC kernel before the convolution. True or False. Use True if the kernel is designed for the removal of IPC effects, like the JWST reference files are.\n')
-            f.write('  crosstalk: xtalk20150303g0.errorcut.txt              #File containing crosstalk coefficients\n')
+            f.write('  crosstalk: {}   #File containing crosstalk coefficients\n'.format(self.crosstalk))
             f.write('  occult: None                                    #Occulting spots correction image\n')
-            f.write('  filtpupilcombo: nircam_filter_pupil_pairings.list       #File that lists the filter wheel element / pupil wheel element combinations. Used only in writing output file\n')
+            f.write('  filtpupilcombo: {}   #File that lists the filter wheel element / pupil wheel element combinations. Used only in writing output file\n'.format(self.filtpupil_pairs))
             f.write('  pixelAreaMap: {}      #Pixel area map for the detector. Used to introduce distortion into the output ramp.\n'.format(input['pixelAreaMap']))
-            f.write('  flux_cal: /ifs/jwst/wit/witserv/data4/nrc/hilbert/simulated_data/NIRCam_zeropoints.list  #File that lists flux conversion factor and pivot wavelength for each filter. Only used when making direct image outputs to be fed into the grism disperser code.')
+            f.write('  flux_cal: {} #File that lists flux conversion factor and pivot wavelength for each filter. Only used when making direct image outputs to be fed into the grism disperser code.'.format(self.fluxcal))
             f.write('\n')
             f.write('nonlin:\n')
             f.write('  limit: 60000.0                           #Upper singal limit to which nonlinearity is applied (ADU)\n')
@@ -654,11 +678,11 @@ class SimInput:
             f.write('  rotation: {}                    #y axis rotation (degrees E of N)\n'.format(input['pav3']))
             f.write('\n')
             f.write('newRamp:\n')
-            f.write('  dq_configfile: dq_init.cfg\n')
-            f.write('  sat_configfile: saturation.cfg\n')
-            f.write('  superbias_configfile: superbias.cfg\n')
-            f.write('  refpix_configfile: refpix.cfg\n')
-            f.write('  linear_configfile: linearity.cfg\n')
+            f.write('  dq_configfile: {}\n'.format(self.dq_init_config))
+            f.write('  sat_configfile: {}\n'.format(self.saturation_config))
+            f.write('  superbias_configfile: {}\n'.format(self.superbias_config))
+            f.write('  refpix_configfile: {}\n'.format(self.refpix_config))
+            f.write('  linear_configfile: {}\n'.format(self.linearity_config))
             f.write('\n')
             f.write('Output:\n')
             #f.write('  use_stsci_output_name: {} #Output filename should follow STScI naming conventions (True/False)\n'.format(outtf))
@@ -804,18 +828,17 @@ class SimInput:
         parser.add_argument("--output_dir",help='Directory into which the yaml files are output',default='./')
         parser.add_argument("--table_file",help='Ascii table containing observation info. Use this or xml+pointing+siaf files.',default=None)
         parser.add_argument("--use_nonstsci_names",help="Use STScI naming convention for output files",action='store_true')
-        parser.add_argument("--subarray_def_file",help="Ascii file containing subarray definitions",default=None)
-        parser.add_argument("--readpatt_def_file",help='Ascii file containing readout pattern definitions',default=None)
-        #parser.add_argument("--point_source",help='point source catalog file',nargs='*',default=[None])
-        #parser.add_argument("--galaxyListFile",help='galaxy (sersic) source catalog file',nargs='*',default=[None])
-        #parser.add_argument("--extended",help='extended source catalog file',nargs='*',default=[None])
-        #parser.add_argument("--convolveExtended",help='Convolve extended sources with NIRCam PSF?',action='store_true')
-        #parser.add_argument("--movingTarg",help='Moving (point source) target catalog (sources moving through fov)',nargs='*',default=[None])
-        #parser.add_argument("--movingTargSersic",help='Moving galaxy (sersic) target catalog (sources moving through fov)',nargs='*',default=[None])
-        #parser.add_argument("--movingTargExtended",help='Moving extended source target catalog (sources moving through fov)',nargs='*',default=[None])
-        #parser.add_argument("--movingTargToTrack",help='Catalog of non-sidereal targets for non-sidereal tracking obs.',nargs='*',default=[None])
-        #parser.add_argument("--bkgdrate",help='Uniform background rate (e-/s) to add to observation.',default=0.)
-        #parser.add_argument("--epoch_list",help="Table file containing epoch start times and telescope roll angles",default=None)
+        parser.add_argument("--subarray_def_file",help="Ascii file containing subarray definitions",default='config')
+        parser.add_argument("--readpatt_def_file",help='Ascii file containing readout pattern definitions',default='config')
+        parser.add_argument("--crosstalk",help="Crosstalk coefficient file",default='config')
+        parser.add_argument("--filtpupil_pairs",help="List of paired filter/pupil elements",default='config')
+        parser.add_argument("--mag15counts",help="File with list of mag 15 countrates per filter",default='config')
+        parser.add_argument("--fluxcal",help="File with zeropoints per filter",default='config')
+        parser.add_argument("--dq_init_config",help="DQ Initialization config file",default='config')
+        parser.add_argument("--saturation_config",help="Saturation config file",default='config')
+        parser.add_argument("--superbias_config",help="Superbias subtraction config file",default='config')
+        parser.add_argument("--refpix_config",help="Refpix subtraction config file",default='config')
+        parser.add_argument("--linearity_config",help="Linearity config file",default='config')
         parser.add_argument("--observation_table",help="Table file containing epoch start times, telescope roll angles, catalogs for each observation",default=None)
         parser.add_argument("--use_JWST_pipeline",help='True/False',action='store_true')
         parser.add_argument("--use_linearized_darks",help='True/False',action='store_true')
