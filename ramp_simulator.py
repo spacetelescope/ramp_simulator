@@ -62,6 +62,15 @@ class RampSim():
         #read in the parameter file
         self.readParameterFile()
 
+
+        print('CHEAT CHEAT CHEAT!! manually setting output directory')
+        print('to the working directory so that I can finish WFSS')
+        print('example dataset!!!')
+        self.params['Output']['directory'] = './'
+
+
+
+        
         # expand locations in the parameter
         # file to be full paths
         self.fullPaths()
@@ -1829,7 +1838,8 @@ class RampSim():
         outModel.meta.exposure.nresets_between_ints = 1
         outModel.meta.exposure.integration_time = rampexptime
         outModel.meta.exposure.exposure_time = rampexptime * self.params['Readout']['nint']
-
+        outModel.meta.model_type = 'RampModel'
+        
         #set the exposure start time 
         outModel.meta.exposure.start_time = ct.mjd
         endingTime = ct.mjd + outModel.meta.exposure.exposure_time/3600./24.

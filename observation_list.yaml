@@ -12,13 +12,13 @@
 #use the same date for all
 
 Observation1:
-  Name: 'observation #1'
+  Name: 'NEP #1'
   Date: 2019-10-14
   PAV3: 0.
-  SWFilter:
-    Name: F200W
-    PointSourceCatalog: F200W_stars.cat
-    GalaxyCatalog: F200W_galaxies.cat
+  SW:
+    Filter: F200W
+    PointSourceCatalog: JWST_cl_F200W_n3.cat.txt
+    GalaxyCatalog: JWST_cl_F200W_n.txt
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -28,10 +28,10 @@ Observation1:
     MovingTargetConvolveExtended: True
     MovingTargetToTrack: None
     BackgroundRate: 0.0
-  LWFilter:
-    Name: F444W
-    PointSourceCatalog: F444W_stars.cat
-    GalaxyCatalog: F444W_galaxies.cat
+  LW:
+    Filter: F444W
+    PointSourceCatalog: JWST_cl_F444W_n3.cat.txt
+    GalaxyCatalog: JWST_cl_F200W_n.txt
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -43,13 +43,13 @@ Observation1:
     BackgroundRate: 0.0
     
 Observation2:
-  Name: 'observation #2'
+  Name: 'NEP #2'
   Date: 2020-01-14
   PAV3: 88.
-  SWFilter:
-    Name: F200W
-    PointSourceCatalog: F200W_stars.cat
-    GalaxyCatalog: F200W_galaxies.cat
+  SW:
+    Filter: F200W
+    PointSourceCatalog: JWST_cl_F200W_n3.cat.txt
+    GalaxyCatalog: JWST_cl_F200W_ntxt
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -59,10 +59,10 @@ Observation2:
     MovingTargetConvolveExtended: True
     MovingTargetToTrack: None
     BackgroundRate: 0.0
-  LWFilter:
-    Name: F444W
-    PointSourceCatalog: F444W_stars.cat
-    GalaxyCatalog: F444W_galaxies.cat
+  LW:
+    Filter: F444W
+    PointSourceCatalog: JWST_cl_F444W_n3.cat.txt
+    GalaxyCatalog: JWST_cl_F444W_ntxt
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -74,13 +74,13 @@ Observation2:
     BackgroundRate: 0.0
 
 Observation3:
-  Name: 'pointing 3'
+  Name: 'SEP #1'
   Date: 2020-01-17
   PAV3: 0.
-  SWFilter:
-    Name: F200W
-    PointSourceCatalog: F200W_stars_pointing3.cat
-    GalaxyCatalog: F200W_galaxies_pointing3.cat
+  SW:
+    Filter: F200W
+    PointSourceCatalog: something_f200w.cat
+    GalaxyCatalog: somethingelse_f200w.cat
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -90,10 +90,10 @@ Observation3:
     MovingTargetConvolveExtended: True
     MovingTargetToTrack: None
     BackgroundRate: 0.0
-  LWFilter:
-    Name: F444W
-    PointSourceCatalog: F444W_stars_pointing3.cat
-    GalaxyCatalog: F444W_galaxies_pointing3.cat
+  LW:
+    Filter: F444W
+    PointSourceCatalog: something_f444w.cat
+    GalaxyCatalog: somethingelse_f444w.cat
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -105,13 +105,13 @@ Observation3:
     BackgroundRate: 0.0
 
 Observation4:
-  Name: 'pointing 4'
+  Name: 'SEP #2'
   Date: 2020-04-17
   PAV3: 88.
-  SWFilter:
-    Name: F200W
-    PointSourceCatalog: F200W_stars_pointing4.cat
-    GalaxyCatalog: F200W_galaxies_pointing4.cat
+  SW:
+    Filter: F200W
+    PointSourceCatalog: something_f200w.cat
+    GalaxyCatalog: somethingelse_f200w.cat
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
@@ -121,10 +121,10 @@ Observation4:
     MovingTargetConvolveExtended: True
     MovingTargetToTrack: None
     BackgroundRate: 0.0
-  LWFilter:
-    Name: F444W
-    PointSourceCatalog: F444W_stars_pointing4.cat
-    GalaxyCatalog: F444W_galaxies_pointing4.cat
+  LW:
+    Filter: F444W
+    PointSourceCatalog: something_f444w.cat
+    GalaxyCatalog: somethingelse_f444w.cat
     ExtendedCatalog: None
     ExtendedScale: 1.0
     ExtendedCenter: 1024,1024
