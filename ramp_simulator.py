@@ -21,6 +21,7 @@ from astropy.table import Table
 from astropy.time import Time, TimeDelta
 from itertools import izip
 import datetime
+from time import sleep
 from astropy.modeling.models import Sersic2D
 import rotations  #this is Colin's set of rotation functions
 from asdf import AsdfFile
