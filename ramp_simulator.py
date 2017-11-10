@@ -59,6 +59,23 @@ class RampSim():
         self.coord_adjust = {'x':1.,'xoffset':0.,'y':1.,'yoffset':0.}
 
     def run(self):
+        #NO LONGER SUPPORTED
+        print("WARNING WARNING!!")
+        print("This code is no longer supported!")
+        print("Updated, easier to use code is located at:")
+        print("https://github.com/spacetelescope/ramp_simulator")
+        print("We recommend you download the updated version")
+        print("of the simulator before running simulations.")
+        print("WARNING WARNING!!")
+        print('')
+        print('')
+        print('')
+        print('')
+        print('')
+        print('')
+        sleep(5)
+
+
         #read in the parameter file
         self.readParameterFile()
 
