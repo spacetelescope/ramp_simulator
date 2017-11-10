@@ -1,4 +1,18 @@
 # ramp_simulator
+
+WARNING WARNING!!!
+
+THIS CODE IS NO LONGER SUPPORTED!!
+Updated code can now be found in:
+https://github.com/spacetelescope/nircam_simulator
+
+WARNING WARNING!!!
+
+
+
+
+
+
 Code to create high-fidelity simulations of JWST multiaccum integrations.
 
 This code takes an existing real, raw dark current ramp for the instrument being simulated, and adds simulated
