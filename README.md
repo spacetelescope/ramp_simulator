@@ -1,4 +1,6 @@
 # ramp_simulator
+Code to create high-fidelity simulations of JWST multiaccum integrations.
+
 
 > [!WARNING]
 > THIS CODE IS NO LONGER SUPPORTED and the repository is archived!!
@@ -9,7 +11,8 @@
 > For any questions or issues related specifically to code here, please submit a ticket at https://stsci.service-now.com/jwst
 
 
-Code to create high-fidelity simulations of JWST multiaccum integrations.
+
+
 
 This code takes an existing real, raw dark current ramp for the instrument being simulated, and adds simulated
 signals on top of the dark current. Options for these simulated sources include point sources, galaxies (2D sersic models),
@@ -24,3 +27,8 @@ The script is called with a single argument; the name of the input parameter fil
 python ramp_simulator.py input_params.yaml
 
 The output is a single multiaccum integration which can be immediately run through the JWST calibration pipeline.
+
+
+BSD 3-Clause License
+
+Copyright (C) 2024 Association of Universities for Research in Astronomy (AURA)
