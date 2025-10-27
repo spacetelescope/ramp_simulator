@@ -1,16 +1,12 @@
 # ramp_simulator
 
-WARNING WARNING!!!
-
-THIS CODE IS NO LONGER SUPPORTED!!
-Updated code can now be found in:
-https://github.com/spacetelescope/nircam_simulator
-
-WARNING WARNING!!!
-
-
-
-
+> [!WARNING]
+> THIS CODE IS NO LONGER SUPPORTED and the repository is archived!!
+>
+> Updated code can now be found in:
+> https://github.com/spacetelescope/mirage
+>
+> For any questions or issues related specifically to code here, please submit a ticket at https://stsci.service-now.com/jwst
 
 
 Code to create high-fidelity simulations of JWST multiaccum integrations.
